@@ -185,3 +185,9 @@ fabric.properties
 # .idea
 
 *.DS_Store
+
+xcuserdata/
+
+project/Backups
+
+*/build/
