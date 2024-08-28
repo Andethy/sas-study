@@ -25,10 +25,10 @@ AutomatorAudioProcessor::AutomatorAudioProcessor()
     parameters(*this, nullptr, "PARAMETERS", createParameterLayout()), // CURRENT PORT
     socket(juce::DatagramSocket())
 {
-    if (socket.bindToPort(54637)) {
+    if (socket.bindToPort(port)) {
         startThread();
     } else {
-        DBG("Failed to bind UDP socket to port 5005");
+        DBG("Failed to bind UDP socket to port" + std::to_string(port));
     }
     
 }
@@ -201,12 +201,13 @@ void AutomatorAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     // the samples and the outer loop is handling the channels.
     // Alternatively, you can process the samples with the channels
     // interleaved by keeping the same state.
-    for (int channel = 0; channel < totalNumInputChannels; ++channel)
-    {
-        auto* channelData = buffer.getWritePointer (channel);
-
-        // ..do something to the data...
-    }
+//    for (int channel = 0; channel < totalNumInputChannels; ++channel)
+//    {
+//        auto* channelData = buffer.getWritePointer (channel);
+//
+//        // ..do something to the data...
+//        // N/A
+//    }
 }
 
 //==============================================================================

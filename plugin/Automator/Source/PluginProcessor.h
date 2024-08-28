@@ -54,7 +54,10 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
     
+    
+    //==============================================================================
     juce::AudioProcessorValueTreeState parameters;
+    const int port = 54637;
 
 private:
     //==============================================================================
