@@ -9,12 +9,14 @@
 #pragma once
 
 #include <JuceHeader.h>
+//#include "PluginEditor.h"
 
 //==============================================================================
 /**
 */
 class AutomatorAudioProcessor  : public juce::AudioProcessor,
-                                 private juce::Thread
+                                 private juce::OSCReceiver,
+                                 private juce::OSCReceiver::ListenerWithOSCAddress<juce::OSCReceiver::MessageLoopCallback>
 {
 public:
     //==============================================================================
@@ -54,7 +56,7 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
     
-    
+//    void setEditorPointer(AutomatorAudioProcessorEditor* editor) { this->editor = editor; }
     //==============================================================================
     juce::AudioProcessorValueTreeState parameters;
     const int port = 54637;
@@ -64,8 +66,11 @@ private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     
     // NETWORKING
-    juce::DatagramSocket socket;
-    void run() override;
+//    juce::DatagramSocket socket;
+//    void run() override;
+//    AutomatorAudioProcessorEditor* editor = nullptr;
+    
+    void oscMessageReceived (const juce::OSCMessage& message) override;
     
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AutomatorAudioProcessor)

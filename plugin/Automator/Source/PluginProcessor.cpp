@@ -21,20 +21,20 @@ AutomatorAudioProcessor::AutomatorAudioProcessor()
                      #endif
                        )
 #endif
-    , juce::Thread("UDP Listener"),
-    parameters(*this, nullptr, "PARAMETERS", createParameterLayout()), // CURRENT PORT
-    socket(juce::DatagramSocket())
+    , parameters(*this, nullptr, "PARAMETERS", createParameterLayout()) // CURRENT PORT
 {
-    if (socket.bindToPort(port)) {
-        startThread();
-    } else {
-        DBG("Failed to bind UDP socket to port" + std::to_string(port));
+    if (!connect(port)) {
+        DBG("Failed to connect to port " + std::to_string(port));
     }
     
+    OSCReceiver::addListener(this, "/rhythm");
+    OSCReceiver::addListener(this, "/pitch");
+    OSCReceiver::addListener(this, "/melody");
 }
 
 AutomatorAudioProcessor::~AutomatorAudioProcessor()
 {
+    disconnect();
 }
 
 //==============================================================================
@@ -43,40 +43,102 @@ juce::AudioProcessorValueTreeState::ParameterLayout AutomatorAudioProcessor::cre
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
     
     
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID("automation", 1),
-                                                                 "Automation",
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID("rhythm", 1),
+                                                                 "Rhythm",
                                                                  0.0f,
                                                                  1.0f,
                                                                  0.0f
                                                                  ));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID("pitch", 2),
+                                                                 "Pitch",
+                                                                 0.0f,
+                                                                 1.0f,
+                                                                 0.0f
+                                                                 ));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID("melody", 3),
+                                                                 "Melody",
+                                                                 0.0f,
+                                                                 1.0f,
+                                                                 0.0f
+                                                                 ));
+    
+    
+    // DEBUG
+    params.push_back(std::make_unique<juce::AudioParameterFloat>("msg", "Message", 0.0f, 1.0f, 0.0f));
+    
     return { params.begin(), params.end() };
 }
 
 //==============================================================================
-void AutomatorAudioProcessor::run()
+//void AutomatorAudioProcessor::run()
+//{
+//    while (!threadShouldExit())
+//    {
+//        char message[256] = {};
+//        int size = socket.read(message, sizeof(message), false);
+//        if (size > 0)
+//        {
+//            // Message -> float
+//            float value = std::stof(message);
+//            
+//            // Bound it to ensure no errors for now
+//            value = juce::jlimit(0.0f, 1.0f, value);
+//            
+//            juce::MessageManager::callAsync([this, value]() {
+//                parameters.getParameterAsValue("automation").setValue(value);
+//            });
+//            
+//            DBG("Received UDP message: " << message);
+//        }
+//        
+//        // 😂
+//        wait(10);
+//    }
+//}
+
+void AutomatorAudioProcessor::oscMessageReceived(const juce::OSCMessage& message)
 {
-    while (!threadShouldExit())
-    {
-        char message[256] = {};
-        int size = socket.read(message, sizeof(message), false);
-        if (size > 0)
-        {
-            // Message -> float
-            float value = std::stof(message);
-            
-            // Bound it to ensure no errors for now
-            value = juce::jlimit(0.0f, 1.0f, value);
-            
-            juce::MessageManager::callAsync([this, value]() {
-                parameters.getParameterAsValue("automation").setValue(value);
-            });
-            
-            DBG("Received UDP message: " << message);
-        }
-        
-        // 😂
-        wait(10);
+    DBG("<TMP> Some message was recieved.");
+    std::cout << "<JUCE> Some message was recieved. ";
+    
+    if (message.size() != 1 || !message[0].isFloat32()) {
+        DBG("Data sent is not in the proper format.");
+        return;
     }
+    
+    juce::OSCAddressPattern addr = message.getAddressPattern();
+    
+    
+    
+    juce::String param;
+    
+    if (addr == juce::OSCAddressPattern("/rhythm"))
+    {
+        param = "rhythm";
+    }
+    else if (addr == juce::OSCAddressPattern("/pitch"))
+    {
+        param = "pitch";
+    }
+    else if (addr == juce::OSCAddressPattern("/melody"))
+    {
+        param = "melody";
+    } else {
+        DBG("Data sent on wrong address pattern.");
+        return;
+    }
+    
+    float value = (juce::jlimit(0.0f, 1.0f, message[0].getFloat32()));
+    
+    DBG("-- " + param + " -- " + std::to_string(value) + " -- ");
+    std::cout << param << " " << std::to_string(value) << std::endl;
+
+    
+//    parameters.getParameter(param)->setValue(juce::jlimit(0.0f, 1.0f, value));
+    juce::MessageManager::callAsync([this, param, value]() {
+        parameters.getParameterAsValue(param).setValue(value);
+    });
+//    parameters.getParameterAsValue(param).setValue);
 }
 
 //==============================================================================
