@@ -59,7 +59,7 @@ public:
 //    void setEditorPointer(AutomatorAudioProcessorEditor* editor) { this->editor = editor; }
     //==============================================================================
     juce::AudioProcessorValueTreeState parameters;
-    const int port = 54637;
+    const int port = 0;
 
 private:
     //==============================================================================

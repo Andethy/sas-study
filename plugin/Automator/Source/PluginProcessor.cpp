@@ -23,6 +23,11 @@ AutomatorAudioProcessor::AutomatorAudioProcessor()
 #endif
     , parameters(*this, nullptr, "PARAMETERS", createParameterLayout()) // CURRENT PORT
 {
+    while (!port) {
+        // Prompt user to input a port #
+        
+    }
+    
     if (!connect(port)) {
         DBG("Failed to connect to port " + std::to_string(port));
     } else {
@@ -65,8 +70,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout AutomatorAudioProcessor::cre
                                                                  ));
     
     
-    // DEBUG
-    params.push_back(std::make_unique<juce::AudioParameterFloat>("msg", "Message", 0.0f, 1.0f, 0.0f));
+    // DEBUG -> port management
+    params.push_back(std::make_unique<juce::AudioParameterInt>(juce::ParameterID("port", 4), "Port", 0, 655535, 0));
+//    port = params.at(3).;
     
     return { params.begin(), params.end() };
 }
