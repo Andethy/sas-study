@@ -5,6 +5,8 @@ from pythonosc import udp_client
 ip = "127.0.0.1"
 port = 54637
 
+client: udp_client.SimpleUDPClient
+
 # Function to handle slider value change and send it via OSC
 def send_value(value):
     x = float(value)
@@ -13,7 +15,7 @@ def send_value(value):
 
 # Main application
 def main():
-    global client
+
     client = udp_client.SimpleUDPClient(ip, port)
 
     # Create the Tkinter window

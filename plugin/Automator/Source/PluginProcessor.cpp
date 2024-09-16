@@ -25,6 +25,8 @@ AutomatorAudioProcessor::AutomatorAudioProcessor()
 {
     if (!connect(port)) {
         DBG("Failed to connect to port " + std::to_string(port));
+    } else {
+        DBG("Connected to port " + std::to_string(port));
     }
     
     OSCReceiver::addListener(this, "/rhythm");
