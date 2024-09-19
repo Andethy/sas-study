@@ -14,7 +14,8 @@
 //==============================================================================
 /**
 */
-class AutomatorAudioProcessorEditor  : public juce::AudioProcessorEditor
+class AutomatorAudioProcessorEditor  : public juce::AudioProcessorEditor,
+                                       private juce::TextEditor::Listener
 {
 public:
     AutomatorAudioProcessorEditor (AutomatorAudioProcessor&);
@@ -23,6 +24,8 @@ public:
     //==============================================================================
     void paint (juce::Graphics&) override;
     void resized() override;
+    
+    void textEditorTextChanged (juce::TextEditor&) override;
     
     void updateOsc(const juce::String& msg);
 
@@ -38,9 +41,15 @@ private:
     juce::Slider pitchSlider;
     juce::Slider melodySlider;
     
+    juce::TextEditor portTextEditor;
+    
+    void updatePort();
+    
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> rhythmAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> pitchAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> melodyAttachment;
+    
+    std::unique_ptr<juce::AlertWindow> portWindow;
     
     juce::Label oscLabel;
 

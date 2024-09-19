@@ -56,10 +56,12 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
     
+    
+    int attemptConnection();
 //    void setEditorPointer(AutomatorAudioProcessorEditor* editor) { this->editor = editor; }
     //==============================================================================
     juce::AudioProcessorValueTreeState parameters;
-    const int port = 0;
+//    const int port = 0;
 
 private:
     //==============================================================================
@@ -69,6 +71,8 @@ private:
 //    juce::DatagramSocket socket;
 //    void run() override;
 //    AutomatorAudioProcessorEditor* editor = nullptr;
+    
+    bool isConnected;
     
     void oscMessageReceived (const juce::OSCMessage& message) override;
     

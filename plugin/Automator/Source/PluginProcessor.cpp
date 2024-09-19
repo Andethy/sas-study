@@ -23,25 +23,59 @@ AutomatorAudioProcessor::AutomatorAudioProcessor()
 #endif
     , parameters(*this, nullptr, "PARAMETERS", createParameterLayout()) // CURRENT PORT
 {
-    while (!port) {
-        // Prompt user to input a port #
-        
-    }
+//    int port = parameters.getParameterAsValue("port").getValue();
+//    if (!port) {
+//        // Prompt user to input a port #
+//        
+//    } else {
+//        if (!connect(port)) {
+//            DBG("Failed to connect to port " + std::to_string(port));
+//        } else {
+//            DBG("Connected to port " + std::to_string(port));
+//        }
+//    }
     
-    if (!connect(port)) {
-        DBG("Failed to connect to port " + std::to_string(port));
-    } else {
-        DBG("Connected to port " + std::to_string(port));
-    }
-    
-    OSCReceiver::addListener(this, "/rhythm");
-    OSCReceiver::addListener(this, "/pitch");
-    OSCReceiver::addListener(this, "/melody");
 }
 
 AutomatorAudioProcessor::~AutomatorAudioProcessor()
 {
     disconnect();
+}
+
+//==============================================================================
+
+int AutomatorAudioProcessor::attemptConnection()
+{
+    int port = parameters.getParameterAsValue("port").getValue();  // Retrieve the port number
+
+    if (port == 0)
+    {
+        DBG("Port number is not set, cannot connect.");
+        return 1;  // Do not attempt to connect if port is 0
+    }
+
+    if (isConnected)
+    {
+        disconnect();
+        isConnected = false;
+    }
+    
+    DBG("Attempting to connect to port " << port);
+    if (!connect(port))
+    {
+        return 2;
+        DBG("Failed to connect to port " << port);
+    }
+    else
+    {
+        DBG("Successfully connected to port " << port);
+        OSCReceiver::addListener(this, "/rhythm");
+        OSCReceiver::addListener(this, "/pitch");
+        OSCReceiver::addListener(this, "/melody");
+        isConnected = true;
+    }
+    
+    return 0;
 }
 
 //==============================================================================
@@ -297,12 +331,19 @@ void AutomatorAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
     // You should use this method to store your parameters in the memory block.
     // You could do that either as raw data, or use the XML or ValueTree classes
     // as intermediaries to make it easy to save and load complex data.
+    juce::MemoryOutputStream(destData, true).writeString(parameters.state.toXmlString());
 }
 
 void AutomatorAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     // You should use this method to restore your parameters from this memory block,
     // whose contents will have been created by the getStateInformation() call.
+    juce::ValueTree tree = juce::ValueTree::fromXml(juce::String::fromUTF8(static_cast<const char*>(data), sizeInBytes));
+
+    if (tree.isValid())
+    {
+        parameters.state = tree;  // Restore the parameters from the saved state
+    }
 }
 
 //==============================================================================
