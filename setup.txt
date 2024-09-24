@@ -1,0 +1,2 @@
+sudo chmod -R 755 /Library/Audio/Plug-Ins/VST3/Automator.vst3
+sudo xattr -rd com.apple.quarantine /Library/Audio/Plug-Ins/VST3/Automator.vst3
