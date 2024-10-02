@@ -37,6 +37,9 @@ private:
     // Replace with values from the server later
 //    juce::Slider progressSlider;
 //    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> sliderAttachment;
+    
+    juce::ToggleButton onButton;
+    
     juce::Slider rhythmSlider;
     juce::Slider pitchSlider;
     juce::Slider melodySlider;
@@ -44,6 +47,8 @@ private:
     juce::TextEditor portTextEditor;
     
     void updatePort();
+        
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> onAttachment;
     
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> rhythmAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> pitchAttachment;

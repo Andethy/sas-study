@@ -54,6 +54,11 @@ AutomatorAudioProcessorEditor::AutomatorAudioProcessorEditor (AutomatorAudioProc
 //    
 //    addAndMakeVisible(progressSlider);
     
+    onButton.setEnabled(true);
+    
+    onAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(audioProcessor.parameters, "on", onButton);
+    addAndMakeVisible(onButton);
+    
     rhythmSlider.setSliderStyle(juce::Slider::LinearHorizontal);
     rhythmSlider.setRange(0.0, 1.0);
     rhythmSlider.setValue(0.0);
@@ -127,6 +132,8 @@ void AutomatorAudioProcessorEditor::resized()
     
     oscLabel.setBounds(40, 180, getWidth() - 80, 20);
     portTextEditor.setBounds(180, 220, 50, 20);
+    
+    onButton.setBounds(340, 240, 25, 25);
     
 }
 

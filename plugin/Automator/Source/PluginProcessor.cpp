@@ -23,17 +23,14 @@ AutomatorAudioProcessor::AutomatorAudioProcessor()
 #endif
     , parameters(*this, nullptr, "PARAMETERS", createParameterLayout()) // CURRENT PORT
 {
-//    int port = parameters.getParameterAsValue("port").getValue();
-//    if (!port) {
-//        // Prompt user to input a port #
-//        
-//    } else {
-//        if (!connect(port)) {
-//            DBG("Failed to connect to port " + std::to_string(port));
-//        } else {
-//            DBG("Connected to port " + std::to_string(port));
-//        }
-//    }
+    int port = parameters.getParameterAsValue("port").getValue();
+    if (port) {
+        if (!connect(port)) {
+            DBG("Failed to connect to port " + std::to_string(port));
+        } else {
+            DBG("Connected to port " + std::to_string(port));
+        }
+    }
     
 }
 
@@ -69,6 +66,8 @@ int AutomatorAudioProcessor::attemptConnection()
     else
     {
         DBG("Successfully connected to port " << port);
+        // ADD LISTENERS 🤦‍♂️
+        OSCReceiver::addListener(this, "/on");
         OSCReceiver::addListener(this, "/rhythm");
         OSCReceiver::addListener(this, "/pitch");
         OSCReceiver::addListener(this, "/melody");
@@ -82,6 +81,12 @@ int AutomatorAudioProcessor::attemptConnection()
 juce::AudioProcessorValueTreeState::ParameterLayout AutomatorAudioProcessor::createParameterLayout()
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
+    
+    params.push_back(std::make_unique<juce::AudioParameterInt>(juce::ParameterID("on", 0),
+                                                               "On",
+                                                               0,
+                                                               1,
+                                                               1));
     
     
     params.push_back(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID("rhythm", 1),
@@ -140,10 +145,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout AutomatorAudioProcessor::cre
 
 void AutomatorAudioProcessor::oscMessageReceived(const juce::OSCMessage& message)
 {
-    DBG("<TMP> Some message was recieved.");
-    std::cout << "<JUCE> Some message was recieved. ";
+    DBG("<TMP> Some message was just recieved.");
     
-    if (message.size() != 1 || !message[0].isFloat32()) {
+    if (message.size() != 1 || (!message[0].isFloat32())) {
         DBG("Data sent is not in the proper format.");
         return;
     }
@@ -154,6 +158,17 @@ void AutomatorAudioProcessor::oscMessageReceived(const juce::OSCMessage& message
     
     juce::String param;
     
+    if (addr == juce::OSCAddressPattern("/on"))
+    {
+        int value = juce::jlimit(0, 1, static_cast<int>(message[0].getFloat32()));
+        DBG("-- on -- " + std::to_string(value) + " -- ");
+        juce::MessageManager::callAsync([this, value]() {
+            parameters.getParameterAsValue("on").setValue(value);
+        });
+        return;
+    }
+        
+        
     if (addr == juce::OSCAddressPattern("/rhythm"))
     {
         param = "rhythm";
@@ -166,7 +181,7 @@ void AutomatorAudioProcessor::oscMessageReceived(const juce::OSCMessage& message
     {
         param = "melody";
     } else {
-        DBG("Data sent on wrong address pattern.");
+        DBG("Data sent on wrong address pattern: " + addr.toString());
         return;
     }
     
@@ -312,6 +327,11 @@ void AutomatorAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 //        // ..do something to the data...
 //        // N/A
 //    }
+    
+    // Should effectively function as mute button
+    if (!parameters.getParameterAsValue("on").getValue()) {
+        buffer.clear();
+    }
 }
 
 //==============================================================================
