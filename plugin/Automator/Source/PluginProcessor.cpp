@@ -265,6 +265,14 @@ void AutomatorAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
 {
     // Use this method as the place to do any pre-playback
     // initialisation that you need..
+    int port = parameters.getParameterAsValue("port").getValue();
+    if (port) {
+        if (!connect(port)) {
+            DBG("Failed to connect to port " + std::to_string(port));
+        } else {
+            DBG("Connected to port " + std::to_string(port));
+        }
+    }
 }
 
 void AutomatorAudioProcessor::releaseResources()
