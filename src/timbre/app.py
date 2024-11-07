@@ -58,14 +58,14 @@ class App:
         self.result_label.grid(row=2, column=0, columnspan=2)
 
         self.mix = tk.DoubleVar()
-        self.send_slider = ttk.Scale(self.app, from_=-1, to=1, orient='horizontal', variable=self.mix)
+        self.send_slider = ttk.Scale(self.app, from_=0, to=1, orient='horizontal', variable=self.mix)
         self.send_slider.grid(row=3, column=0, columnspan=2, pady=10)
 
         self.send_button = ttk.Button(self.app, text="Send to Model", command=lambda: self.run_model(self.a_audio_path, self.b_audio_path, self.mix.get()))
         self.send_button.grid(row=4, column=0, pady=10)
 
-        self.play_c_button = ttk.Button(self.app, text="Play Combined Sound", command=lambda: self.play_audio(self.output_audio_path))
-        self.play_c_button.grid(row=4, column=1, pady=10)
+        # self.play_c_button = ttk.Button(self.app, text="Play Combined Sound", command=lambda: self.play_audio(self.output_audio_path))
+        # self.play_c_button.grid(row=4, column=1, pady=10)
 
         self.play_a_button = ttk.Button(self.app, text="Play Sound A", command=self.play_a)
         self.play_a_button.grid(row=5, column=0, pady=10)
@@ -91,10 +91,19 @@ class App:
         self.canvas.draw()
         self.canvas.get_tk_widget().grid(row=6, column=0, columnspan=2, pady=10)
 
+        self.app.protocol("WM_DELETE_WINDOW", self.on_close)
         pygame.mixer.init()
 
     def run(self):
         self.app.mainloop()
+
+    def on_close(self):
+        if pygame.mixer.music.get_busy():
+            pygame.mixer.music.stop()
+        print("Stopping audio")
+        pygame.mixer.quit()
+        print("Closing app")
+        self.app.destroy()
 
     def find_closest_match(self, safety, urgency):
         distances = np.sqrt((self.data['stretched_safety'] - safety)**2 + (self.data['stretched_urgency'] - urgency)**2)
@@ -155,7 +164,7 @@ def run_model_callback(sound_a: str, sound_b: str, mix: float) -> str:
 
     :param sound_a: file path to sound A
     :param sound_b: file path to sound B
-    :param mix: float between -1 and 1, how much of sound A to mix with sound B
+    :param mix: float between 0 and 1, how much of sound A to mix with sound B
     :return: file path to the output audio
     """
     pass
