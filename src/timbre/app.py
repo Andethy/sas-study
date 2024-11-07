@@ -58,7 +58,7 @@ class App:
         self.result_label.grid(row=2, column=0, columnspan=2)
 
         self.mix = tk.DoubleVar()
-        self.send_slider = ttk.Scale(self.app, from_=0, to=1, orient='horizontal', variable=self.mix)
+        self.send_slider = ttk.Scale(self.app, from_=0, to=1, orient='horizontal', variable=self.mix, command=self.on_slider_update)
         self.send_slider.grid(row=3, column=0, columnspan=2, pady=10)
 
         self.send_button = ttk.Button(self.app, text="Send to Model", command=lambda: self.run_model(self.a_audio_path, self.b_audio_path, self.mix.get()))
@@ -104,6 +104,10 @@ class App:
         pygame.mixer.quit()
         print("Closing app")
         self.app.destroy()
+
+    @staticmethod
+    def on_slider_update(value):
+        slider_update_callback(float(value))
 
     def find_closest_match(self, safety, urgency):
         distances = np.sqrt((self.data['stretched_safety'] - safety)**2 + (self.data['stretched_urgency'] - urgency)**2)
@@ -166,6 +170,13 @@ def run_model_callback(sound_a: str, sound_b: str, mix: float) -> str:
     :param sound_b: file path to sound B
     :param mix: float between 0 and 1, how much of sound A to mix with sound B
     :return: file path to the output audio
+    """
+    pass
+
+def slider_update_callback(value):
+    """
+
+    :param value: float between 0 and 1, how much of sound A to mix with sound B
     """
     pass
 
