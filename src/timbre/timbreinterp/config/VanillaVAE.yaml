@@ -1,0 +1,30 @@
+dataset:
+  component: nsynth, sas128
+
+model:
+  encoder:
+    in_channel: 1
+    num_layers: 6
+    kernel_size: 4
+    stride: 2
+    inflate_factor: 4
+  decoder:
+    in_channel: 4096
+    num_layers: 6
+    kernel_size: 4
+    stride: 2
+    deflate_factor: 4
+
+audio:
+  samplerate: 16000
+  n_fft: 2048
+  win_length: 2048
+  hop_length: 256
+  orig_spec_height: 1025
+  orig_spec_width: 251
+  default_len_in_s: 4
+
+train:
+  batch_size: 128
+  learning_rate: 1e-4
+
