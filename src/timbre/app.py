@@ -16,9 +16,9 @@ import torchaudio
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .TimbreInterp.model.preprocessing import AudioSpec
-from .TimbreInterp.model.postprocessing import Vocoder
-from .TimbreInterp.model.model_builder import VanillaAE
+from .timbreinterp.model.preprocessing import AudioSpec
+from .timbreinterp.model.postprocessing import Vocoder
+from .timbreinterp.model.model_builder import VanillaAE
 
 from threading import Thread
 import queue
@@ -149,7 +149,7 @@ class App:
         pygame.mixer.init()
     
     def init_configs(self):
-        config_path = "src/timbre/TimbreInterp/config/VanillaVAE.yaml"
+        config_path = "src/timbre/timbreinterp/config/VanillaVAE.yaml"
         with open(config_path) as f:
             self.configs = yaml.safe_load(f)
         self.system_sr = self.configs["audio"]["samplerate"]
