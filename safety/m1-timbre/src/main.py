@@ -1,4 +1,4 @@
-from src.timbre.app import main
+from timbre.app import main
 
 if __name__ == "__main__":
     main()

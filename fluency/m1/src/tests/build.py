@@ -1,10 +1,10 @@
 import os
 import shutil
 
-path_to_build_au = "../plugin/Automator/Builds/MacOSX/build/Debug/Automator.component"
+path_to_build_au = "../../plugin/Automator/Builds/MacOSX/build/Debug/Automator.component"
 path_to_plugin_au = '/Library/Audio/Plug-Ins/Components/Automator.component'
 
-path_to_build_vst3 = "../plugin/Automator/Builds/MacOSX/build/Debug/Automator.vst3"
+path_to_build_vst3 = "../../plugin/Automator/Builds/MacOSX/build/Debug/Automator.vst3"
 path_to_plugin_vst3 = '/Library/Audio/Plug-Ins/VST3/Automator.vst3'
 
 if __name__ == '__main__':

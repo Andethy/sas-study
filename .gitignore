@@ -191,3 +191,12 @@ xcuserdata/
 *Backups/
 
 */build/
+
+
+# End of https://www.gitignore.io/api/python,python3,flask,jetbrains,pycharm,visualstudiocode,sublimetext,linux,macos,windows
+
+fluency/m1/src/xarm/
+safety/m1-timbre/resources/checkpoint/
+safety/m1-timbre/resources/interp_results/
+
+!placeholder.txt
