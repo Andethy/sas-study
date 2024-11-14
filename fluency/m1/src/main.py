@@ -93,8 +93,8 @@ def main(xarm):
 
 
 if __name__ == "__main__":
-    simulation = False
-    xarm = utils.robotsUtils("192.168.1.215", simulation)
+    simulation = True
+    xarm = utils.Robot("192.168.1.215", simulation)
     if not simulation:
         xarm.setupBot()
     input("hi")
