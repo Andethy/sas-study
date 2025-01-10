@@ -1,0 +1,1 @@
+SYNTH_RANGE = 24
