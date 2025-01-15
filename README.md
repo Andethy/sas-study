@@ -3,7 +3,7 @@
 
 ## Setup (PyCharm)
 
-Make sure that the root "common" folder and all "src" folders are marked as sources root.
+Make sure that the all `src` directories are marked as sources root. Either that or ensure the `PYTHONPATH` environment variable includes all `src` directories.
 
 ## Usage
 
