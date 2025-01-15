@@ -60,12 +60,13 @@ class Robot(ut.robotsUtils):
         # I think it will make a blip-type sound ascending c scale
         for i in range(0, TMP, 8):
             a[i] = 1
+            a[i + 1] = 1
             temp = ntm(note_seq.popleft() + str(pitch_seq.popleft()))
             p.extend([temp] * 8)
 
         print(np.array(p))
 
-        self.test_osc()
+        self.test_osc(a, p)
 
 
 def ntm(note: str) -> float:
