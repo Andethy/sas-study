@@ -54,14 +54,14 @@ class Robot(ut.robotsUtils):
         a = [0] * TMP
         p = []
 
-        note_seq = collections.deque('CDEFGABC')
-        pitch_seq = collections.deque(([0] * 7) + [1])
+        note_seq = collections.deque(['A#0', 'D#0', 'C#0', 'G0', 'E0', 'B0', 'F#0', 'C#1'])
+        # octave_seq = collections.deque(([0] * 7) + [0])
 
         # I think it will make a blip-type sound ascending c scale
         for i in range(0, TMP, 8):
             a[i] = 1
             a[i + 1] = 1
-            temp = ntm(note_seq.popleft() + str(pitch_seq.popleft()))
+            temp = ntm(note_seq.popleft())
             p.extend([temp] * 8)
 
         print(np.array(p))
@@ -76,7 +76,7 @@ def ntm(note: str) -> float:
     Only accepts notes in the format [ABCDEFG][#][01]
     """
 
-    tone, octave = note[:-1], note[-1]
+    tone, octave = note[0:-1], note[-1]
     if tone not in md.TONICS_STR or not octave.isnumeric() or int(octave) < 0 or int(octave) > 1:
         raise ValueError(f"Invalid tone {tone} or octave {octave}")
 
