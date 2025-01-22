@@ -1,5 +1,5 @@
 import collections
-import time
+import time as t
 
 import numpy as np
 from pythonosc import udp_client
@@ -8,10 +8,21 @@ from pythonosc import udp_client
 from common import utils as ut, midi as md
 from constants import SYNTH_RANGE
 
+class EnvelopeGenerator:
+
+    def __init__(self, attack=0.05, release=0.25):
+        self.attack = attack
+        self.release = release
+
+    def __call__(self, n, x, *args, **kwargs):
+        return float(min(x / self.attack, 1) if n != 'X' else max(1 - x / self.release, 0))
+
+
 
 class Robot(ut.robotsUtils):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.eg = EnvelopeGenerator()
 
     def test_osc(self, amp: list, pitch: list):
         """
@@ -42,7 +53,7 @@ class Robot(ut.robotsUtils):
             print(a, p)
             self.client.send_message("/rhythm",float(a))
             self.client.send_message("/melody", float(p))
-            time.sleep(0.1)
+            t.sleep(0.1)
 
     def test_scale(self):
         """
@@ -68,6 +79,63 @@ class Robot(ut.robotsUtils):
 
         self.test_osc(a, p)
 
+    def from_file(self, file, time = 5):
+        melody = extract_notes(file, time)
+
+        # Hmm refactor this later TODO this needs to be done
+        self.client = udp_client.SimpleUDPClient(self.IPtoSEND, 25251)
+
+        print(melody)
+
+        start = t.time()
+        elapsed = 0
+
+        idx = 0
+        while elapsed < time:
+            if elapsed > melody[idx][-1]:
+                idx += 1
+
+            note, on, off = melody[idx]
+
+            # TODO: refactor osc address to constants that are more easily identifiable
+            self.client.send_message("/rhythm", self.eg(note, elapsed - on))
+
+            if note != 'X':
+                self.client.send_message("/melody", ntm(note))
+
+            print(ntm(note), self.eg(note, elapsed - on))
+
+            t.sleep(0.004)
+            elapsed = t.time() - start
+
+        self.client.send_message("/rhythm", 0.0)
+
+
+
+
+
+def extract_notes(f_name, time) -> list:
+    with open(f_name) as f:
+        res = [line.split() for line in f.readlines()]
+
+        # 1st pass: prefix sum
+        res[0].append(float(res[0][-1]))
+        res[0][-2] = 0
+
+        for i in range(1, len(res)):
+            temp = float(res[i][-1])
+            res[i][-1] = res[i - 1][-1]
+            res[i].append(res[i][-1] + temp)
+
+        # 2nd pass: converting notes to time
+        for i in range(len(res)):
+            res[i][-2] *= time / res[-1][-1]
+            res[i][-1] *= time / res[-1][-1]
+
+
+    return res
+
+
 
 def ntm(note: str) -> float:
     """
@@ -75,6 +143,8 @@ def ntm(note: str) -> float:
 
     Only accepts notes in the format [ABCDEFG][#][01]
     """
+    if note == 'X':
+        return -1
 
     tone, octave = note[0:-1], note[-1]
     if tone not in md.TONICS_STR or not octave.isnumeric() or int(octave) < 0 or int(octave) > 1:
