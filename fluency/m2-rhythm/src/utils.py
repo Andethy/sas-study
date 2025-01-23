@@ -6,7 +6,8 @@ from pythonosc import udp_client
 
 # import config
 from common import utils as ut, midi as md
-from constants import SYNTH_RANGE
+from constants import SYNTH_RANGE, ADSR_PORT, NOTE_PORT
+
 
 class EnvelopeGenerator:
 
@@ -51,8 +52,8 @@ class Robot(ut.robotsUtils):
 
         for a, p in zip(amp, pitch):
             print(a, p)
-            self.client.send_message("/rhythm",float(a))
-            self.client.send_message("/melody", float(p))
+            self.client.send_message(ADSR_PORT,float(a))
+            self.client.send_message(NOTE_PORT, float(p))
             t.sleep(0.1)
 
     def test_scale(self):
@@ -97,18 +98,17 @@ class Robot(ut.robotsUtils):
 
             note, on, off = melody[idx]
 
-            # TODO: refactor osc address to constants that are more easily identifiable
-            self.client.send_message("/rhythm", self.eg(note, elapsed - on))
+            self.client.send_message(ADSR_PORT, self.eg(note, elapsed - on))
 
             if note != 'X':
-                self.client.send_message("/melody", ntm(note))
+                self.client.send_message(NOTE_PORT, ntm(note))
 
             print(ntm(note), self.eg(note, elapsed - on))
 
             t.sleep(0.004)
             elapsed = t.time() - start
 
-        self.client.send_message("/rhythm", 0.0)
+        self.client.send_message(ADSR_PORT, 0.0)
 
 
 
