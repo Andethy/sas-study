@@ -19,6 +19,11 @@ class OSCManager:
         for i in range(k):
             self.ports[base + i] = udp_client.SimpleUDPClient(address, base + i)
 
+        # Case C: custom port setup
+        for port, client in kwargs.items():
+            # noinspection PyTypeChecker
+            self.ports[port] = client
+
     def __getitem__(self, item):
         return self.ports[item]
 
