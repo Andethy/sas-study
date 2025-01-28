@@ -22,7 +22,7 @@ class EnvelopeGenerator:
 
 class Robot(ut.robotsUtils):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, 25251, 25252, **kwargs)
         self.eg = EnvelopeGenerator()
 
     def test_osc(self, amp: list, pitch: list):
@@ -117,7 +117,33 @@ class Robot(ut.robotsUtils):
 
         self.client.send_message(ADSR_PORT, 0.0)
 
+    def harmony(self, time):
+        melodies = {
+            25251: collections.deque(extract_notes('C1,1|D1,0.5|X,0.5|C1,1|D1,0.5|X,0.5|D#1,1|F1,0.5|X,0.5|G1,1|D#1,0.5|X,0.5|C1,1|X,1', time)),
+            25252: collections.deque(extract_notes('C0,2|D#0,2|G0,2|G#0,2|G0,1|X,1', time))
+        }
 
+        # self.client = udp_client.SimpleUDPClient(self.IPtoSEND, 25251)
+
+        start = t.time()
+        elapsed = 0
+        last_on = 0
+
+        while elapsed < time:
+            for port in melodies:
+                if len(melodies[port]) > 1 and elapsed > melodies[port][0][-1]:
+                    melodies[port].popleft()
+
+                note, on, off = melodies[port][0]
+                if note != 'X':
+                    self.clients(port, ADSR_PORT, 1)
+                    self.clients(port, NOTE_PORT, ntm(note))
+                else:
+                    self.clients(port, ADSR_PORT, 0)
+
+
+            t.sleep(0.004)
+            elapsed = t.time() - start
 
 
 

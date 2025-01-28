@@ -3,13 +3,15 @@ import math
 import time
 from pythonosc import udp_client
 
+from common.osc import OSCManager
+
 # Timing Mods #
 global stepT
 stepT = 0.004
 
 
 class robotsUtils:
-    def __init__(self, IPadress, sim=False):
+    def __init__(self, IPadress, *args, sim=False):
         self.arm = IPadress
         self.initPos = [0, 0, 0, 90, 0, 0, 0]
         if sim == False:
@@ -23,6 +25,7 @@ class robotsUtils:
         # this is indexed at 1
         self.routes = (('melody',) * 8) + (('pitch',) * 8)
         self.client = ...
+        self.clients = OSCManager(self.IPtoSEND, *args)
 
     def setupBot(self):
         self.xArm.set_simulation_robot(on_off=False)
