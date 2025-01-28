@@ -11,7 +11,7 @@ from constants import SYNTH_RANGE, ADSR_PORT, NOTE_PORT
 
 class EnvelopeGenerator:
 
-    def __init__(self, attack=0.05, release=0.25):
+    def __init__(self, attack=0.001, release=0.2):
         self.attack = attack
         self.release = release
 
@@ -114,23 +114,26 @@ class Robot(ut.robotsUtils):
 
 
 
-def extract_notes(f_name, time) -> list:
-    with open(f_name) as f:
-        res = [line.split() for line in f.readlines()]
+def extract_notes(file, time) -> list:
+    try:
+        with open(file) as f:
+            res = [line.split() for line in f.readlines()]
+    except FileNotFoundError:
+        res = [line.split(',') for line in file.split('|')]
 
-        # 1st pass: prefix sum
-        res[0].append(float(res[0][-1]))
-        res[0][-2] = 0
+    # 1st pass: prefix sum
+    res[0].append(float(res[0][-1]))
+    res[0][-2] = 0
 
-        for i in range(1, len(res)):
-            temp = float(res[i][-1])
-            res[i][-1] = res[i - 1][-1]
-            res[i].append(res[i][-1] + temp)
+    for i in range(1, len(res)):
+        temp = float(res[i][-1])
+        res[i][-1] = res[i - 1][-1]
+        res[i].append(res[i][-1] + temp)
 
-        # 2nd pass: converting notes to time
-        for i in range(len(res)):
-            res[i][-2] *= time / res[-1][-1]
-            res[i][-1] *= time / res[-1][-1]
+    # 2nd pass: converting notes to time
+    for i in range(len(res)):
+        res[i][-2] *= time / res[-1][-1]
+        res[i][-1] *= time / res[-1][-1]
 
 
     return res
