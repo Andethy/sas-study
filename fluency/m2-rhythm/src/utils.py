@@ -92,16 +92,23 @@ class Robot(ut.robotsUtils):
         elapsed = 0
 
         idx = 0
+
+        last_on = 0
         while elapsed < time:
             if elapsed > melody[idx][-1]:
                 idx += 1
 
             note, on, off = melody[idx]
 
-            self.client.send_message(ADSR_PORT, self.eg(note, elapsed - on))
+
 
             if note != 'X':
+                last_on = off
+                self.client.send_message(ADSR_PORT, self.eg(note, elapsed - on))
                 self.client.send_message(NOTE_PORT, ntm(note))
+            else:
+                self.client.send_message(ADSR_PORT, self.eg(note, elapsed - last_on))
+
 
             print(ntm(note), self.eg(note, elapsed - on))
 

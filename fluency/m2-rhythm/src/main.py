@@ -6,6 +6,6 @@ if __name__ == "__main__":
     xarm = utils.Robot("192.168.1.215", simulation)
     if not simulation:
         xarm.setupBot()
-    mg = MelodyGenerator()
+    mg = MelodyGenerator(scale='major')
     # xarm.from_file('resources/demo.txt', 4)
     xarm.from_file(mg.generate(length=1), 5)
