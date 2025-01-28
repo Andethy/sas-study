@@ -32,10 +32,26 @@ UNUSED = {
 
 
 def get_key_notes(root, scale):
-    root_int = TONICS_STR[root]
-    scale_int = SCALES[scale]
-    key_int = list(root_int + sc for sc in scale_int)
+    key_int = get_key_ints(root, scale)
     key_str = []
     for note in key_int:
         key_str.append(TONICS_INT[note % 12])
     return list(TONICS_INT[note % 12] for note in key_int)
+
+def get_key_ints(root, scale):
+    root_int = TONICS_STR[root]
+    scale_int = SCALES[scale]
+    return list(root_int + sc for sc in scale_int)
+
+def note_to_int(note):
+    if note == 'X':
+        return -1
+
+    tone, octave = note[0:-1], note[-1]
+    if tone not in TONICS_STR or not octave.isnumeric() or int(octave) < 0 or int(octave) > 1:
+        raise ValueError(f"Invalid tone {tone} or octave {octave}")
+
+    return TONICS_STR[tone] + 12 * int(octave)
+
+def int_to_note(value):
+    return TONICS_INT[value % 12] + str(value // 12) if value > -1 else 'X'

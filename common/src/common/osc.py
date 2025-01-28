@@ -24,6 +24,10 @@ class OSCManager:
             # noinspection PyTypeChecker
             self.ports[port] = client
 
+    def __call__(self, *args, **kwargs):
+        for port, val in args:
+            self[port] = val
+
     def __getitem__(self, item):
         return self.ports[item]
 
