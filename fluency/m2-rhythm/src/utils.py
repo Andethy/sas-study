@@ -1,3 +1,4 @@
+import ast
 import collections
 import time as t
 
@@ -6,7 +7,9 @@ from pythonosc import udp_client
 
 # import config
 from common import utils as ut, midi as md
+from common.osc import OSCManager
 from constants import SYNTH_RANGE, ADSR_PORT, NOTE_PORT
+from melody import HarmonyGenerator
 
 
 class EnvelopeGenerator:
@@ -23,7 +26,7 @@ class EnvelopeGenerator:
 class Robot(ut.robotsUtils):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, 25251, 25252, **kwargs)
-        self.eg = EnvelopeGenerator()
+        self.eg = EnvelopeGenerator(release=0.1)
 
     def test_osc(self, amp: list, pitch: list):
         """
@@ -129,6 +132,8 @@ class Robot(ut.robotsUtils):
         elapsed = 0
         last_on = 0
 
+        idx = 0
+
         while elapsed < time:
             for port in melodies:
                 if len(melodies[port]) > 1 and elapsed > melodies[port][0][-1]:
@@ -141,9 +146,41 @@ class Robot(ut.robotsUtils):
                 else:
                     self.clients(port, ADSR_PORT, 0)
 
-
             t.sleep(0.004)
             elapsed = t.time() - start
+
+    def from_curve(self, curve = (0.1, 0.3, 0.7, 0.9), time=5):
+        hg = HarmonyGenerator()
+
+        harmony = extract_chords(hg.generate_chord_progression(curve, 0.125), time)
+
+        osc = OSCManager(self.IPtoSEND, base=25251, k=4)
+
+        start = t.time()
+        elapsed = 0
+        last_on = 0
+
+        idx = 0
+
+        while elapsed < time:
+            if elapsed > harmony[idx][-1]:
+                idx += 1
+
+            notes, on, off = harmony[idx]
+
+            for i, port in enumerate(osc):
+                if notes != 'X':
+                    last_on = off
+                    osc[port, ADSR_PORT] = self.eg(notes[i], elapsed - on)
+                    osc[port, NOTE_PORT] = ntm(notes[i])
+                else:
+                    osc[port, ADSR_PORT] = self.eg(notes, elapsed - last_on)
+            print(notes, on, off)
+            t.sleep(0.004)
+            elapsed = t.time() - start
+        t.sleep(1.0)
+        for port in osc:
+            osc[port, ADSR_PORT] = 0
 
 
 
@@ -171,6 +208,28 @@ def extract_notes(file, time) -> list:
 
     return res
 
+def extract_chords(expr, time) -> list:
+    curr = str(expr.split('|')[0].split('-')[0])
+    print('hmm', curr)
+    print(ast.literal_eval(curr))
+    res = [[ast.literal_eval(str(line.split('-')[0].replace(' ', ''))) if line.split('-')[0] != 'X' else 'X', line.split('-')[1]]  for line in expr.split('|')]
+
+
+    # 1st pass: prefix sum
+    res[0].append(float(res[0][-1]))
+    res[0][-2] = 0
+
+    for i in range(1, len(res)):
+        temp = float(res[i][-1])
+        res[i][-1] = res[i - 1][-1]
+        res[i].append(res[i][-1] + temp)
+
+    # 2nd pass: converting notes to time
+    for i in range(len(res)):
+        res[i][-2] *= time / res[-1][-1]
+        res[i][-1] *= time / res[-1][-1]
+
+    return res
 
 
 def ntm(note: str) -> float:
@@ -183,7 +242,7 @@ def ntm(note: str) -> float:
         return -1
 
     tone, octave = note[0:-1], note[-1]
-    if tone not in md.TONICS_STR or not octave.isnumeric() or int(octave) < 0 or int(octave) > 1:
+    if tone not in md.TONICS_STR or not octave.isnumeric() or int(octave) < 0 or int(octave) >= SYNTH_RANGE / 12:
         raise ValueError(f"Invalid tone {tone} or octave {octave}")
 
     return (md.TONICS_STR[tone] + 12 * int(octave)) / SYNTH_RANGE

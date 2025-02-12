@@ -10,6 +10,9 @@ class OSCManager:
     def __init__(self, address, *ports, base=-1, k=0, **kwargs):
         self.address = address
         self.ports = {}
+        self.base = base
+        self.k = k
+        self._i = 0
 
         # Case A: Set ports specified in args
         for port in ports:
@@ -35,7 +38,18 @@ class OSCManager:
         return self.ports[item]
 
     def __setitem__(self, key, value):
-        self.ports[key].send_message(key, float(value))
+        port, addr = key
+        self.ports[port].send_message(addr, float(value))
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._i >= self.k:
+            self._i = 0
+            raise StopIteration
+        self._i += 1
+        return self.base + (self._i - 1)
 
     def reconnect(self):
         for port in self.ports:

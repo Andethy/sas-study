@@ -1,4 +1,4 @@
-SYNTH_RANGE = 24
+SYNTH_RANGE = 36
 
 ### OSC PORTS
 ADSR_PORT = '/rhythm'

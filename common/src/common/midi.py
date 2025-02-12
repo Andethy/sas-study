@@ -38,7 +38,7 @@ HARMONIES_SHORT = {
     "m7": (0, 3, 7, 10),
     "dom7": (0, 4, 7, 10),
     "dom7sus4": (0, 5, 7, 10),
-    "dom7b5": (0, 5, 6, 10),
+    "dom7b5": (0, 4, 8, 10),
     "dom7aug5": (0, 5, 8, 10),
     "m7b5": (0, 3, 6, 10),
     "dim7": (0, 3, 6, 9),
@@ -54,6 +54,19 @@ UNUSED = {
 
 # New additions based on the research paper
 CHORD_TENSIONS = {
+    # Tonic
+    'C_M': 0.0, 'C_M7': 0.07, 'C_M6': 0.21, 'A_m': 0.50,
+    'A_m7': 0.57, 'E_m': 0.57, 'E_m7': 0.64,
+    # Subdominant
+    'F_M': 0.36, 'F_M7': 0.43, 'F_M6': 0.57, 'D_m': 0.57,
+    'D_m7': 0.64,
+    # Dominant
+    'G_M': 0.36, 'G_dom7': 0.43, 'G_dom7sus4': 0.57, 'B_dim': 0.79,
+    # 'G_dom7b5': 0.79, 'G_dom7aug5': 0.79,
+    'B_dom7b5': 0.86, 'B_dim7': 0.86,
+}
+
+CHORD_TENSIONS_FULL = {
     # Tonic
     'C_M': 0.0, 'C_M7': 0.07, 'C_M6': 0.21, 'A_m': 0.50,
     'A_m7': 0.57, 'E_m': 0.57, 'E_m7': 0.64, 'F#_m7b5': 0.86,

@@ -133,7 +133,7 @@ class HarmonyGenerator:
         self.chord_tensions = md.CHORD_TENSIONS
         self.chord_families = md.CHORD_FAMILIES
 
-    def generate_chord_progression(self, target_tensions):
+    def generate_chord_progression(self, target_tensions, rest = 0.5):
         progression = []
         for target_tension in target_tensions:
             possible_chords = self._generate_possible_chords()
@@ -141,7 +141,7 @@ class HarmonyGenerator:
             selected_chord = r.choices(possible_chords, weights=weights, k=1)[0]
             progression.append(selected_chord[0])
         progression.append('C_M')
-        return progression
+        return self.to_str(progression, 2, rest)
 
     def _generate_possible_chords(self):
         return list(self.chord_tensions.items())
@@ -150,7 +150,7 @@ class HarmonyGenerator:
         weights = []
         for chord, tension in possible_chords:
             distance = abs(tension - target_tension)
-            weight = 1 / (distance + 0.1)
+            weight = 1 / ((distance + 0.1) ** 2)
             weights.append(weight)
         return weights
 
@@ -177,13 +177,13 @@ class HarmonyGenerator:
     @staticmethod
     def to_str(chords, length, rest):
         res = []
-        for expr in chords:
+        for idx, expr in enumerate(chords):
             note_str, chord_str = expr.split('_')
-            note_str += '1'
+            note_str += '0' if idx < len(chords) - 1 else '1'
             note_int = md.note_to_int(note_str)
             chord_int = [note_int + i for i in md.HARMONIES_SHORT[chord_str]]
-            res.append(f'{[md.int_to_note(i) for i in chord_int]},{length - rest}')
-            res.append(f'X,{rest}')
+            res.append(f'{[md.int_to_note(i) for i in chord_int]}-{length - rest}')
+            res.append(f'X-{rest}')
 
         return '|'.join(res)
 
