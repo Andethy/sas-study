@@ -174,6 +174,19 @@ class HarmonyGenerator:
             enhanced_progression.append(enhanced_chord)
         return enhanced_progression
 
+    @staticmethod
+    def to_str(chords, length, rest):
+        res = []
+        for expr in chords:
+            note_str, chord_str = expr.split('_')
+            note_str += '1'
+            note_int = md.note_to_int(note_str)
+            chord_int = [note_int + i for i in md.HARMONIES_SHORT[chord_str]]
+            res.append(f'{[md.int_to_note(i) for i in chord_int]},{length - rest}')
+            res.append(f'X,{rest}')
+
+        return '|'.join(res)
+
 
 
 
@@ -203,4 +216,4 @@ if __name__ == '__main__':
     # mg.to_midi(temp)
     # midi_to_mp3('melody.mid', 'melody.mp3', '../resources/piano.sf2')
     temp = hg.generate_chord_progression([0.1, 0.2, 0.6, 0.9])
-    print(temp)
+    print(hg.to_str(temp, 2, 0.5))
