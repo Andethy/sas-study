@@ -63,7 +63,7 @@ CHORD_TENSIONS = {
     # Dominant
     'G_M': 0.36, 'G_dom7': 0.43, 'G_dom7sus4': 0.57, 'B_dim': 0.79,
     'G_dom7b5': 0.79, 'G_dom7aug5': 0.79, 'B_dom7b5': 0.86, 'B_dim7': 0.86,
-    'Db_dom7': 1.00
+    'C#_dom7': 1.00
 }
 
 CHORD_FAMILIES = {
