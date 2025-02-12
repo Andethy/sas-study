@@ -127,6 +127,57 @@ class MelodyGenerator:
         midi_file.save(filename)
         print(f"MIDI file saved as {filename}")
 
+class HarmonyGenerator:
+    def __init__(self, key='C'):
+        self.key = key
+        self.chord_tensions = md.CHORD_TENSIONS
+        self.chord_families = md.CHORD_FAMILIES
+
+    def generate_chord_progression(self, target_tensions):
+        progression = []
+        for target_tension in target_tensions:
+            possible_chords = self._generate_possible_chords()
+            weights = self._calculate_weights(possible_chords, target_tension)
+            selected_chord = r.choices(possible_chords, weights=weights, k=1)[0]
+            progression.append(selected_chord[0])
+        progression.append('C_M')
+        return progression
+
+    def _generate_possible_chords(self):
+        return list(self.chord_tensions.items())
+
+    def _calculate_weights(self, possible_chords, target_tension):
+        weights = []
+        for chord, tension in possible_chords:
+            distance = abs(tension - target_tension)
+            weight = 1 / (distance + 0.1)
+            weights.append(weight)
+        return weights
+
+    def get_chord_tension(self, chord):
+        return self.chord_tensions.get(chord, 0.0)
+
+    def get_chord_family(self, chord):
+        for family, chords in self.chord_families.items():
+            if chord in chords:
+                return family
+        return 'unknown'
+
+    def enhance_tension(self, original_progression, delta_t):
+        enhanced_progression = []
+        for chord in original_progression:
+            current_tension = self.get_chord_tension(chord)
+            new_tension = current_tension + delta_t
+            possible_chords = self._generate_possible_chords()
+            weights = self._calculate_weights(possible_chords, new_tension)
+            enhanced_chord = r.choices(possible_chords, weights=weights, k=1)[0][0]
+            enhanced_progression.append(enhanced_chord)
+        return enhanced_progression
+
+
+
+
+
 def midi_to_mp3(midi_file: str, output_mp3: str, soundfont: str = "default.sf2"):
     """
     Converts a MIDI file to MP3 using FluidSynth.
@@ -146,7 +197,10 @@ def midi_to_mp3(midi_file: str, output_mp3: str, soundfont: str = "default.sf2")
     print(f"MP3 file saved as: {output_mp3}")
 
 if __name__ == '__main__':
+    hg = HarmonyGenerator()
     mg = MelodyGenerator(scale='aeolian')
-    temp = mg.generate_with_constant_rests(1, length=1)
-    mg.to_midi(temp)
-    midi_to_mp3('melody.mid', 'melody.mp3', '../resources/piano.sf2')
+    # temp = mg.generate_with_constant_rests(1, length=1)
+    # mg.to_midi(temp)
+    # midi_to_mp3('melody.mid', 'melody.mp3', '../resources/piano.sf2')
+    temp = hg.generate_chord_progression([0.1, 0.2, 0.6, 0.9])
+    print(temp)

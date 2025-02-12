@@ -204,3 +204,4 @@ Builds/
 JuceLibraryCode/
 
 !placeholder.txt
+/fluency/m2-rhythm/resources/*.sf2
