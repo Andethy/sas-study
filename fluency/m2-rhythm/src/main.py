@@ -10,4 +10,4 @@ if __name__ == "__main__":
     # xarm.from_file('resources/demo.txt', 4)
     # xarm.from_file(mg.generate(length=1), 5)
     # xarm.harmony(5)
-    xarm.from_curve()
+    xarm.from_curve((0.9, 0.7, 0.3, 0.1))

@@ -64,7 +64,7 @@ class MelodyGenerator:
 
         return '|'.join(f'{md.int_to_note(val)},{dur}' for val in melody)
 
-    def generate_with_constant_rests(self, octave: int = 1, sig: int = 4, sub: int = 2, length: int = 2):
+    def generate_with_constant_rests(self, octave: int = 1, sig: int = 4, sub: int = 2, length: int = 2, resolve: bool = True):
         tonic = self.root + 12 * octave
         dur = 1 / sub
         melody = [tonic, -1]
@@ -94,9 +94,9 @@ class MelodyGenerator:
             melody.append(curr)
             melody.append(-1)  # Ensure a rest after each note
 
-        melody.append(tonic)
-        melody.append(-1)  # Final rest
-        print(melody)
+        if resolve:
+            melody.append(tonic)
+            melody.append(-1)  # Final rest
 
         return '|'.join(f'{md.int_to_note(val)},{dur}' for val in melody)
 
@@ -179,7 +179,7 @@ class HarmonyGenerator:
         res = []
         for idx, expr in enumerate(chords):
             note_str, chord_str = expr.split('_')
-            note_str += '0' if idx < len(chords) - 1 else '1'
+            note_str += '0' if idx < len(chords) - 1 else '0'
             note_int = md.note_to_int(note_str)
             chord_int = [note_int + i for i in md.HARMONIES_SHORT[chord_str]]
             res.append(f'{[md.int_to_note(i) for i in chord_int]}-{length - rest}')
