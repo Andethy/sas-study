@@ -150,7 +150,7 @@ class HarmonyGenerator:
         weights = []
         for chord, tension in possible_chords:
             distance = abs(tension - target_tension)
-            weight = 1 / ((distance + 0.1) ** 2)
+            weight = 1 / ((distance + 0.01) ** 3)
             weights.append(weight)
         return weights
 
