@@ -5,7 +5,7 @@
       <sourceFolder url="file://$MODULE_DIR$/safety/m1-timbre/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/fluency/m1-melody/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/common/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/fluency/m2-rhythm/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/fluency/m2-harmony/src" isTestSource="false" />
     </content>
     <orderEntry type="jdk" jdkName="sas" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
