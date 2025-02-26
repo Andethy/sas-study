@@ -8,7 +8,7 @@ from pythonosc import udp_client
 # import config
 from common import utils as ut, midi as md
 from common.osc import OSCManager
-from constants import SYNTH_RANGE, ADSR_PORT, NOTE_PORT
+from constants import SYNTH_RANGE, ADSR_PORT, NOTE_PORT, ON_PORT
 from melody import HarmonyGenerator
 
 
@@ -182,6 +182,36 @@ class StaticRobot(ut.robotsUtils):
         for port in osc:
             osc[port, ADSR_PORT] = 0
 
+class DynamicRobot(ut.robotsUtils):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.eg = EnvelopeGenerator(attack=0.01, release=0.5)
+        self.osc = OSCManager(self.IPtoSEND, base=25251, k=4)
+        for port in self.osc:
+            self.osc[port, ON_PORT] = 1
+            self.osc[port, ADSR_PORT] = 0
+        self.chords = None
+
+
+    def activate(self, tensions):
+
+        hg = HarmonyGenerator()
+        chords = extract_chords(hg.get_chords_by_tension(tensions), 10)
+        self.chords = [chord[0] for chord in chords[::2]]
+
+        print(self.chords)
+
+        for port in self.osc:
+            self.osc[port, ADSR_PORT] = 1
+
+    def deactivate(self):
+        for port in self.osc:
+            self.osc[port, ADSR_PORT] = 0
+
+    def set_tension(self, index):
+        for port, note in zip(self.osc, self.chords[index][:4]):
+            print(f'Setting port {port} to {note}')
+            self.osc[port, NOTE_PORT] = ntm(note)
 
 
 def extract_notes(file, time) -> list:
@@ -245,4 +275,4 @@ def ntm(note: str) -> float:
     if tone not in md.TONICS_STR or not octave.isnumeric() or int(octave) < 0 or int(octave) >= SYNTH_RANGE / 12:
         raise ValueError(f"Invalid tone {tone} or octave {octave}")
 
-    return (md.TONICS_STR[tone] + 12 * int(octave)) / SYNTH_RANGE
+    return (md.TONICS_STR[tone] + 12 * (int(octave))) / SYNTH_RANGE

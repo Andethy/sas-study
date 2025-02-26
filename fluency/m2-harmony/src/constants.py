@@ -4,3 +4,4 @@ SYNTH_RANGE = 36
 ADSR_PORT = '/rhythm'
 NOTE_PORT = '/melody'
 TIMBRE_PORT = '/pitch'
+ON_PORT = '/on'

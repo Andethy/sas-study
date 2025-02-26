@@ -174,6 +174,12 @@ class HarmonyGenerator:
             enhanced_progression.append(enhanced_chord)
         return enhanced_progression
 
+    def get_chords_by_tension(self, tension_ranges):
+        """Generate chords based on the predefined tension ranges."""
+        target_tensions = [r.uniform(tension_ranges[i], tension_ranges[i + 1]) for i in
+                           range(len(tension_ranges) - 1)]
+        return self.generate_chord_progression(target_tensions, rest=0)
+
     @staticmethod
     def to_str(chords, length, rest):
         res = []

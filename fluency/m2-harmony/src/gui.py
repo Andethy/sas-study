@@ -94,7 +94,64 @@ class StaticPlayer:
         self.xarm.from_curve(y_new.tolist(), duration)
 
 
+class DynamicPlayer:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Dynamic Tension Controller")
+        self.root.geometry("200x150")
+
+        # Tension slider
+        self.tension_var = tk.DoubleVar(value=0.5)
+        self.tension_slider = ttk.Scale(root, from_=0.0, to=1.0, variable=self.tension_var, orient="horizontal",
+                                        command=self.on_tension_change)
+        ttk.Label(root, text="Tension:").pack()
+        self.tension_slider.pack(fill="x")
+
+        # Preset ranges for tension
+        self.count = 5
+        self.tension_ranges = [0.0] + [i / self.count for i in range(1, self.count + 1)]
+        self.current_chunk = self.get_tension_chunk(self.tension_var.get())
+
+        # Robot instance
+        self.xarm = utils.DynamicRobot("192.168.1.215", sim=True)
+
+        # Toggle button
+        self.robot_active = False
+        self.toggle_button = ttk.Button(root, text="Turn ON", command=self.toggle_robot)
+        self.toggle_button.pack(pady=10)
+
+    def get_tension_chunk(self, value):
+        """Determine which chunk the tension value falls into."""
+        for i in range(len(self.tension_ranges) - 1):
+            if self.tension_ranges[i] <= value < self.tension_ranges[i + 1]:
+                return i
+        return len(self.tension_ranges) - 1  # Return last chunk if at max value
+
+    def on_tension_change(self, event):
+        """Check if the slider entered a new chunk and update tension if needed."""
+        if not self.robot_active:
+            return  # Ignore changes if the robot is off
+
+        new_chunk = self.get_tension_chunk(self.tension_var.get())
+        if new_chunk != self.current_chunk:
+            self.current_chunk = new_chunk
+            # preset_tension = self.tension_ranges[new_chunk]
+            print(f"Applying new tension preset: {new_chunk}")
+            self.xarm.set_tension(self.current_chunk)
+
+    def toggle_robot(self):
+        """Toggle the robot's state between ON and OFF."""
+        self.robot_active = not self.robot_active
+        if self.robot_active:
+            self.toggle_button.config(text="Turn OFF")
+            print("Robot activated.")
+            self.xarm.activate(self.tension_ranges)
+        else:
+            self.toggle_button.config(text="Turn ON")
+            print("Robot deactivated.")
+            self.xarm.deactivate()
+
 if __name__ == "__main__":
     root = tk.Tk()
-    app = StaticPlayer(root)
+    app = DynamicPlayer(root)
     root.mainloop()
