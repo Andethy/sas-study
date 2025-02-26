@@ -7,7 +7,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import utils
 
 
-class CurveDrawer:
+class StaticPlayer:
     def __init__(self, root):
         self.root = root
         self.root.title("Curve Drawer")
@@ -45,7 +45,7 @@ class CurveDrawer:
         self.play_button = ttk.Button(root, text="Play Curve", command=self.play_curve)
         self.play_button.pack()
 
-        self.xarm = utils.Robot("192.168.1.215", sim=True)
+        self.xarm = utils.StaticRobot("192.168.1.215", sim=True)
 
 
     def on_press(self, event):
@@ -96,5 +96,5 @@ class CurveDrawer:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = CurveDrawer(root)
+    app = StaticPlayer(root)
     root.mainloop()

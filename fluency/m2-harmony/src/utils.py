@@ -23,10 +23,10 @@ class EnvelopeGenerator:
 
 
 
-class Robot(ut.robotsUtils):
+class StaticRobot(ut.robotsUtils):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, 25251, 25252, **kwargs)
-        self.eg = EnvelopeGenerator(attack=0.001, release=0.25)
+        self.eg = EnvelopeGenerator(attack=0.01, release=0.5)
 
     def test_osc(self, amp: list, pitch: list):
         """
@@ -152,7 +152,7 @@ class Robot(ut.robotsUtils):
     def from_curve(self, curve = (0.1, 0.3, 0.7, 0.9), time=5):
         hg = HarmonyGenerator()
 
-        harmony = extract_chords(hg.generate_chord_progression(curve, 0.5), time)
+        harmony = extract_chords(hg.generate_chord_progression(curve, 0.), time)
 
         osc = OSCManager(self.IPtoSEND, base=25251, k=4)
 
