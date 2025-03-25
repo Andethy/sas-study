@@ -153,5 +153,5 @@ class DynamicPlayer:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = DynamicPlayer(root)
+    app = StaticPlayer(root)
     root.mainloop()
