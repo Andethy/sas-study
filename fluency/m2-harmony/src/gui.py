@@ -1,3 +1,4 @@
+import threading
 import tkinter as tk
 from tkinter import ttk
 import numpy as np
@@ -76,22 +77,52 @@ class StaticPlayer:
         self.drawing = False
 
     def play_curve(self):
-        """Sample the curve and call the callback."""
         if len(self.x_data) < 2:
             print("Draw a curve first!")
             return
 
-        # Interpolating to get n points
         n = self.divisions_var.get()
         x_new = np.linspace(0, 1, n)
         y_new = np.interp(x_new, self.x_data, self.y_data)
-
         duration = self.time_var.get()
-        print(f"Playing curve over {duration} seconds with {n} samples:")
-        print(y_new.tolist())
+        interval_ms = int((duration / n) * 1000)  # Convert to milliseconds
 
-        # Replace this with your actual callback function
-        self.xarm.from_curve(y_new.tolist(), duration)
+        self.ax.clear()
+        self.ax.set_xlim(0, 1)
+        self.ax.set_ylim(0, 1)
+        self.ax.plot(self.x_data, self.y_data, 'b-', lw=2)  # Redraw base curve
+
+        # State for animation
+        self.current_point = 0
+        self.x_samples = x_new
+        self.y_samples = y_new
+
+        def animate():
+            if self.current_point < len(self.x_samples):
+                # Redraw base curve
+                self.ax.clear()
+                self.ax.set_xlim(0, 1)
+                self.ax.set_ylim(0, 1)
+                self.ax.plot(self.x_data, self.y_data, 'b-', lw=2)
+
+                # Draw red dot at current point
+                x = self.x_samples[self.current_point]
+                y = self.y_samples[self.current_point]
+                self.ax.plot(x, y, 'ro', markersize=8)
+                self.fig.canvas.draw()
+
+                self.current_point += 1
+                self.root.after(interval_ms, animate)
+            else:
+                print("Playback complete.")
+
+        animate()
+
+        # Run the robot command in a background thread
+        def run_robot():
+            self.xarm.from_curve(self.y_samples.tolist(), duration)
+
+        threading.Thread(target=run_robot, daemon=True).start()
 
 
 class DynamicPlayer:
