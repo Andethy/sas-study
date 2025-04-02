@@ -140,7 +140,7 @@ class HarmonyGenerator:
             weights = self._calculate_weights(possible_chords, target_tension)
             selected_chord = r.choices(possible_chords, weights=weights, k=1)[0]
             progression.append(selected_chord[0])
-        progression.append('C_M')
+        # progression.append('C_M')
         return self.to_str(progression, 2, rest)
 
     def _generate_possible_chords(self):

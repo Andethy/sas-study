@@ -77,6 +77,8 @@ class StaticRobot(ut.robotsUtils):
             a[i] = 1
             a[i + 1] = 1
             temp = ntm(note_seq.popleft())
+            if temp > 15:
+                temp %= 12
             p.extend([temp] * 8)
 
         print(np.array(p))
@@ -172,7 +174,10 @@ class StaticRobot(ut.robotsUtils):
                 if notes != 'X':
                     last_on = off
                     osc[port, ADSR_PORT] = self.eg(notes[i], elapsed - on)
-                    osc[port, NOTE_PORT] = ntm(notes[i])
+                    temp = ntm(notes[i])
+                    if temp > 15:
+                        temp -= 12
+                    osc[port, NOTE_PORT] = temp
                 else:
                     osc[port, ADSR_PORT] = self.eg(notes, elapsed - last_on)
             print(notes, on, off)
@@ -275,4 +280,9 @@ def ntm(note: str) -> float:
     if tone not in md.TONICS_STR or not octave.isnumeric() or int(octave) < 0 or int(octave) >= SYNTH_RANGE / 12:
         raise ValueError(f"Invalid tone {tone} or octave {octave}")
 
-    return (md.TONICS_STR[tone] + 12 * (int(octave))) / SYNTH_RANGE
+    temp = md.TONICS_STR[tone]
+    octave = int(octave)
+    if temp > 4 and octave > 0:
+        octave -= 1
+        print('reducing')
+    return (temp + 12 * (octave)) / SYNTH_RANGE
