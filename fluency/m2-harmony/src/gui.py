@@ -4,7 +4,9 @@ from tkinter import ttk
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from music21.instrument import SuspendedCymbal
 
+import melody
 import utils
 
 
@@ -182,7 +184,109 @@ class DynamicPlayer:
             print("Robot deactivated.")
             self.xarm.deactivate()
 
+
+import tkinter as tk
+from tkinter import ttk
+import utils  # assumed to contain DynamicRobot
+
+
+# Also assumed:
+# - HarmonyGenerator is available from your previous code.
+# - md (for chord data, note conversion, etc.) is available.
+
+class SuspendedPlayer:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Suspended Tension Controller")
+        self.root.geometry("300x350")
+
+        # Create tension dropdown with 21 discrete options (0.0 to 1.0).
+        self.tension_options = [round(i / 20.0, 2) for i in range(21)]
+        self.tension_var = tk.StringVar(value=str(0.5))
+        ttk.Label(root, text="Tension:").pack(pady=(10, 0))
+        self.tension_dropdown = ttk.Combobox(
+            root,
+            textvariable=self.tension_var,
+            values=[str(opt) for opt in self.tension_options],
+            state="readonly"
+        )
+        self.tension_dropdown.pack(fill="x", padx=10, pady=5)
+        self.tension_dropdown.bind("<<ComboboxSelected>>", self.on_tension_change)
+
+        # Text widget for logging changes.
+        self.log_text = tk.Text(root, height=10, width=40)
+        self.log_text.pack(padx=10, pady=5)
+        self.log_text.insert(tk.END, "Log:\n")
+
+        # Initialize preset ranges and current chunk (as used in DynamicPlayer).
+        self.count = 5
+        self.tension_ranges = [0.0] + [i / self.count for i in range(1, self.count + 1)]
+        self.current_chunk = self.get_tension_chunk(float(self.tension_var.get()))
+
+        # xarm robot instance (using DynamicRobot) and toggle button.
+        self.xarm = utils.DynamicRobot("192.168.1.215", sim=True)
+        self.robot_active = False
+        self.toggle_button = ttk.Button(root, text="Turn ON", command=self.toggle_robot)
+        self.toggle_button.pack(pady=10)
+
+        # Initialize the HarmonyGenerator instance and starting chord.
+        self.hg = melody.HarmonyGenerator()
+        self.prev_chord = "C_M"
+        self.log_text.insert(tk.END, f"Starting Chord: {self.prev_chord}\n")
+
+    def get_tension_chunk(self, value):
+        """Determine which chunk the tension value falls into."""
+        for i in range(len(self.tension_ranges) - 1):
+            if self.tension_ranges[i] <= value < self.tension_ranges[i + 1]:
+                return i
+        return len(self.tension_ranges) - 1
+
+    def on_tension_change(self, event=None):
+        # Parse tension value from dropdown as float.
+        try:
+            current_tension = float(self.tension_var.get())
+        except ValueError:
+            current_tension = 0.5
+
+        self.log_text.insert(tk.END, f"Tension changed to: {current_tension:.3f}\n")
+        self.log_text.see(tk.END)
+
+        # Use preset ranges to decide if the robot's tension chunk should change.
+        new_chunk = self.get_tension_chunk(current_tension)
+        if new_chunk != self.current_chunk:
+            self.current_chunk = new_chunk
+            if self.robot_active:
+                print(f"Applying new tension preset: {new_chunk}")
+                self.xarm.set_tension(new_chunk)
+
+        # Now update the chord progression based on the tension delta.
+        prev_tension = self.hg.get_chord_tension(self.prev_chord)
+        delta_t = current_tension - prev_tension
+
+        # Generate the new chord using enhance_tension.
+        new_chord_list = self.hg.enhance_tension([self.prev_chord], delta_t)
+        new_chord = new_chord_list[0]
+        progression_str = f"{self.prev_chord} -> {new_chord}"
+        self.log_text.insert(tk.END, f"Chord progression updated: {progression_str}\n\n")
+        self.log_text.see(tk.END)
+
+        # Update previous chord for subsequent transitions.
+        self.prev_chord = new_chord
+
+    def toggle_robot(self):
+
+        self.robot_active = not self.robot_active
+        if self.robot_active:
+            self.toggle_button.config(text="Turn OFF")
+            print("Robot activated.")
+            self.xarm.activate(self.tension_ranges)
+        else:
+            self.toggle_button.config(text="Turn ON")
+            print("Robot deactivated.")
+            self.xarm.deactivate()
+
 if __name__ == "__main__":
     root = tk.Tk()
-    app = StaticPlayer(root)
+    app = SuspendedPlayer(root)
     root.mainloop()
+
