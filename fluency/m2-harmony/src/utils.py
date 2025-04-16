@@ -218,6 +218,23 @@ class DynamicRobot(ut.robotsUtils):
             print(f'Setting port {port} to {note}')
             self.osc[port, NOTE_PORT] = ntm(note)
 
+    def set_chord_by_tension(self, tension, prev_chord, hg: HarmonyGenerator, lambda_balance=1):
+        """
+        Sets robot OSC outputs based on a new chord selected from the target tension.
+        """
+        new_chord = hg.select_chord_by_tension(tension, prev_chord, lambda_balance)
+        print(new_chord)
+        notes = hg.chord_to_list(new_chord)
+        print('??', notes)
+        notes = [ntm(note) for note in notes]
+        print('???', notes)
+
+        for port, note in zip(self.osc, notes):
+            print(f"Setting port {port} to {note} (from chord {new_chord})")
+            self.osc[port, NOTE_PORT] = note
+
+        return new_chord
+
 
 def extract_notes(file, time) -> list:
     try:
@@ -267,6 +284,7 @@ def extract_chords(expr, time) -> list:
     return res
 
 
+
 def ntm(note: str) -> float:
     """
     ntm: note to midi
@@ -282,7 +300,7 @@ def ntm(note: str) -> float:
 
     temp = md.TONICS_STR[tone]
     octave = int(octave)
-    if temp > 4 and octave > 0:
-        octave -= 1
-        print('reducing')
+    # if temp > 4 and octave > 0:
+    #     octave -= 1
+    #     print('reducing')
     return (temp + 12 * (octave)) / SYNTH_RANGE

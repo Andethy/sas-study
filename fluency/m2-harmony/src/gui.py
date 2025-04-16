@@ -213,25 +213,22 @@ class SuspendedPlayer:
         self.tension_dropdown.pack(fill="x", padx=10, pady=5)
         self.tension_dropdown.bind("<<ComboboxSelected>>", self.on_tension_change)
 
-        # Text widget for logging changes.
         self.log_text = tk.Text(root, height=10, width=40)
         self.log_text.pack(padx=10, pady=5)
         self.log_text.insert(tk.END, "Log:\n")
 
-        # Initialize preset ranges and current chunk (as used in DynamicPlayer).
         self.count = 5
         self.tension_ranges = [0.0] + [i / self.count for i in range(1, self.count + 1)]
         self.current_chunk = self.get_tension_chunk(float(self.tension_var.get()))
 
-        # xarm robot instance (using DynamicRobot) and toggle button.
         self.xarm = utils.DynamicRobot("192.168.1.215", sim=True)
         self.robot_active = False
         self.toggle_button = ttk.Button(root, text="Turn ON", command=self.toggle_robot)
         self.toggle_button.pack(pady=10)
 
-        # Initialize the HarmonyGenerator instance and starting chord.
         self.hg = melody.HarmonyGenerator()
-        self.prev_chord = "C_M"
+        self.prev_tension = 0
+        self.prev_chord = self.xarm.set_chord_by_tension(0, 'C_M', self.hg, 0)
         self.log_text.insert(tk.END, f"Starting Chord: {self.prev_chord}\n")
 
     def get_tension_chunk(self, value):
@@ -242,7 +239,6 @@ class SuspendedPlayer:
         return len(self.tension_ranges) - 1
 
     def on_tension_change(self, event=None):
-        # Parse tension value from dropdown as float.
         try:
             current_tension = float(self.tension_var.get())
         except ValueError:
@@ -251,26 +247,24 @@ class SuspendedPlayer:
         self.log_text.insert(tk.END, f"Tension changed to: {current_tension:.3f}\n")
         self.log_text.see(tk.END)
 
-        # Use preset ranges to decide if the robot's tension chunk should change.
         new_chunk = self.get_tension_chunk(current_tension)
+        new_chord = None
         if new_chunk != self.current_chunk:
             self.current_chunk = new_chunk
             if self.robot_active:
                 print(f"Applying new tension preset: {new_chunk}")
-                self.xarm.set_tension(new_chunk)
+                # self.xarm.set_tension(new_chunk)
+                new_chord = self.xarm.set_chord_by_tension(current_tension, self.prev_chord, self.hg, 0)
 
-        # Now update the chord progression based on the tension delta.
-        prev_tension = self.hg.get_chord_tension(self.prev_chord)
-        delta_t = current_tension - prev_tension
+        # prev_tension = self.hg.get_chord_tension(self.prev_chord)
+        # delta_t = current_tension - prev_tension
 
-        # Generate the new chord using enhance_tension.
-        new_chord_list = self.hg.enhance_tension([self.prev_chord], delta_t)
-        new_chord = new_chord_list[0]
+        # new_chord = self.hg.select_chord_by_tension(current_tension, self.prev_chord)
+
         progression_str = f"{self.prev_chord} -> {new_chord}"
         self.log_text.insert(tk.END, f"Chord progression updated: {progression_str}\n\n")
         self.log_text.see(tk.END)
 
-        # Update previous chord for subsequent transitions.
         self.prev_chord = new_chord
 
     def toggle_robot(self):
