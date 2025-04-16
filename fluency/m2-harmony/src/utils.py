@@ -300,7 +300,7 @@ def ntm(note: str) -> float:
 
     temp = md.TONICS_STR[tone]
     octave = int(octave)
-    # if temp > 4 and octave > 0:
-    #     octave -= 1
-    #     print('reducing')
+    if temp > 5 and octave > 0:
+        octave -= 1
+        print('reducing')
     return (temp + 12 * (octave)) / SYNTH_RANGE

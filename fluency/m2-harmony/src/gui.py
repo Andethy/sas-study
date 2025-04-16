@@ -251,10 +251,10 @@ class SuspendedPlayer:
         new_chord = None
         if new_chunk != self.current_chunk:
             self.current_chunk = new_chunk
-            if self.robot_active:
-                print(f"Applying new tension preset: {new_chunk}")
-                # self.xarm.set_tension(new_chunk)
-                new_chord = self.xarm.set_chord_by_tension(current_tension, self.prev_chord, self.hg, 0)
+        if self.robot_active:
+            print(f"Applying new tension preset: {new_chunk}")
+            # self.xarm.set_tension(new_chunk)
+            new_chord = self.xarm.set_chord_by_tension(current_tension, self.prev_chord, self.hg, 0.1)
 
         # prev_tension = self.hg.get_chord_tension(self.prev_chord)
         # delta_t = current_tension - prev_tension
