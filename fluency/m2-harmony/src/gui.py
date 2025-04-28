@@ -1,3 +1,4 @@
+import sys
 import threading
 import time
 import tkinter as tk
@@ -461,6 +462,9 @@ class StaticPlayerV2:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = StaticPlayerV2(root)
+    if sys.argv[1] == 'static':
+        StaticPlayerV2(root)
+    else:
+        SuspendedPlayer(root)
     root.mainloop()
 
