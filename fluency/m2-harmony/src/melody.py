@@ -135,7 +135,7 @@ class HarmonyGenerator:
         self.chord_tensions = md.CHORD_TENSIONS
         self.chord_families = md.CHORD_FAMILIES
 
-    def select_chord_by_tension(self, current_tension, previous_chord, lambda_balance=1.0):
+    def select_chord_by_tension(self, current_tension, previous_chord, lambda_balance=1.0, k=4):
         possible_chords = self._generate_possible_chords()
         weights = []
 
@@ -150,12 +150,24 @@ class HarmonyGenerator:
                 delta_error = 0.0
 
             composite_error = tension_error + lambda_balance * delta_error
-            weight = 1 / ((composite_error + 1e-15) ** 10)
+            weight = 1 / ((composite_error + 1e-15) ** 3)
             weights.append(weight)
 
+        largest = np.argpartition(weights, -k)[-4:]
+
+        pc = []
+        w = []
+        for i in largest:
+            if possible_chords[i][0] in (previous_chord, 'C_M'):
+                continue
+            pc.append(possible_chords[i])
+            w.append(weights[i])
+
         print("@", current_tension, previous_chord, lambda_balance)
-        print("@@", weights)
-        return r.choices(possible_chords, weights=weights, k=1)[0][0]
+        print("@@", pc, w)
+
+
+        return r.choices(pc, weights=w, k=1)[0][0] if current_tension > 0 else 'C_M'
 
     def generate_chord_progression(self, target_tensions, delta_target=0.0, rest=0.5, lambda_balance=1.0, k=4):
         """

@@ -222,7 +222,7 @@ class DynamicRobot(ut.robotsUtils):
         """
         Sets robot OSC outputs based on a new chord selected from the target tension.
         """
-        new_chord = hg.select_chord_by_tension(tension, prev_chord, lambda_balance)
+        new_chord = hg.select_chord_by_tension(tension, prev_chord, lambda_balance=lambda_balance)
         print(new_chord)
         notes = hg.chord_to_list(new_chord)
         print('??', notes)
