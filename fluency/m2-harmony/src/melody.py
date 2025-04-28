@@ -135,7 +135,29 @@ class HarmonyGenerator:
         self.chord_tensions = md.CHORD_TENSIONS
         self.chord_families = md.CHORD_FAMILIES
 
-    def generate_chord_progression(self, target_tensions, delta_target=0.0, rest=0.5, lambda_balance=1.0):
+    def select_chord_by_tension(self, current_tension, previous_chord, lambda_balance=1.0):
+        possible_chords = self._generate_possible_chords()
+        weights = []
+
+        for chord, chord_tension in possible_chords:
+            tension_error = abs(chord_tension - current_tension)
+
+            if previous_chord is not None:
+                delta_target = current_tension - self.get_chord_tension(previous_chord)
+                measured_delta = self._calculate_transition_delta(previous_chord, chord)
+                delta_error = abs(measured_delta - delta_target)
+            else:
+                delta_error = 0.0
+
+            composite_error = tension_error + lambda_balance * delta_error
+            weight = 1 / ((composite_error + 1e-15) ** 10)
+            weights.append(weight)
+
+        print("@", current_tension, previous_chord, lambda_balance)
+        print("@@", weights)
+        return r.choices(possible_chords, weights=weights, k=1)[0][0]
+
+    def generate_chord_progression(self, target_tensions, delta_target=0.0, rest=0.5, lambda_balance=1.0, k=4):
         """
         delta_target: desired delta tension between consecutive chords
         lambda_balance: weight factor to balance tension vs. transition delta
@@ -145,6 +167,7 @@ class HarmonyGenerator:
         for idx, target_tension in enumerate(target_tensions):
             possible_chords = self._generate_possible_chords()
             weights = []
+
             for chord, chord_tension in possible_chords:
                 # Compute tension error: difference between candidate chord's tension and target tension.
                 tension_error = abs(chord_tension - target_tension)
@@ -161,12 +184,30 @@ class HarmonyGenerator:
                 composite_error = tension_error + lambda_balance * delta_error
 
                 # Convert error into a weight (using a smoothing constant epsilon = 0.01)
-                weight = 1 / ((composite_error + 0.01) ** 3)
+                weight = 1 / ((composite_error + 0.001) ** 4)
                 weights.append(weight)
 
+
+            largest = np.argpartition(weights, -k)[-4:]
+
+            pc = []
+            w = []
+            for i in largest:
+                pc.append(possible_chords[i])
+                w.append(weights[i])
+
+            print('L*', largest)
+
             # Choose chord based on composite weight
-            selected_chord = r.choices(possible_chords, weights=weights, k=1)[0][0]
+            selected_chord = r.choices(pc, weights=w, k=1)[0][0]
+            if target_tension == 0:
+                selected_chord = 'C_M'
             progression.append(selected_chord)
+
+            print('TARGET TENSION:', target_tension)
+            print(tuple(zip(pc, w)))
+            print('ACTUAL TENSION', selected_chord )
+
             print('enhanced', selected_chord)
             if previous_chord:
                 print(self._calculate_transition_delta(previous_chord, selected_chord))
@@ -189,7 +230,6 @@ class HarmonyGenerator:
         tension_diff = abs(tension_a - tension_b)
         sign = np.sign(tension_a - tension_b)
 
-        # Extract base notes and chord type identifiers.
         note_a, chord_type_a = chord_a.split('_')
         note_b, chord_type_b = chord_b.split('_')
         base_a = md.note_to_int(note_a + '0')
@@ -197,12 +237,9 @@ class HarmonyGenerator:
         intervals_a = md.HARMONIES_SHORT[chord_type_a]
         intervals_b = md.HARMONIES_SHORT[chord_type_b]
 
-        # Compute the chord pitches.
         chord_a_notes = [base_a + interval for interval in intervals_a]
         chord_b_notes = [base_b + interval for interval in intervals_b]
 
-        # Compute the denominator as the sum of squared differences between all pairs of notes.
-        # (Make sure to handle the case where the denominator might be zero.)
         diff = np.sqrt(sum((i - j) ** 2 for i, j in zip(chord_a_notes, chord_b_notes)))
 
         if diff == 0:
@@ -267,7 +304,15 @@ class HarmonyGenerator:
 
         return '|'.join(res)
 
-
+    @staticmethod
+    def chord_to_list(chord: str):
+        """
+        Convert a chord string like 'C_M' into a list of MIDI note integers.
+        """
+        root_str, chord_type = chord.split('_')
+        root_int = md.note_to_int(root_str + '0')  # e.g., C0 → 12, D#0 → 15, etc.
+        intervals = md.HARMONIES_SHORT[chord_type]
+        return [md.int_to_note(root_int + i) for i in intervals]
 
 
 

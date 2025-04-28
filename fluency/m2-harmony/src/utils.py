@@ -154,7 +154,7 @@ class StaticRobot(ut.robotsUtils):
     def from_curve(self, curve = (0.1, 0.3, 0.7, 0.9), time=5):
         hg = HarmonyGenerator()
 
-        harmony = extract_chords(hg.generate_chord_progression(curve, 0.), time)
+        harmony = extract_chords(hg.generate_chord_progression(curve, rest=0., lambda_balance=0.1), time)
 
         osc = OSCManager(self.IPtoSEND, base=25251, k=4)
 

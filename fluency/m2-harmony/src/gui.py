@@ -182,12 +182,14 @@ class SuspendedPlayer:
     def __init__(self, root):
         self.root = root
         self.root.title("Suspended Tension Controller")
-        self.root.geometry("300x350")
+        self.root.geometry("300x500")
 
         # Create tension dropdown with 21 discrete options (0.0 to 1.0).
         self.tension_options = [round(i / 20.0, 2) for i in range(21)]
         self.tension_var = tk.StringVar(value=str(0.5))
+
         ttk.Label(root, text="Tension:").pack(pady=(10, 0))
+
         self.tension_dropdown = ttk.Combobox(
             root,
             textvariable=self.tension_var,
@@ -196,6 +198,21 @@ class SuspendedPlayer:
         )
         self.tension_dropdown.pack(fill="x", padx=10, pady=5)
         self.tension_dropdown.bind("<<ComboboxSelected>>", self.on_tension_change)
+
+        self.tension_frame = tk.Frame(root)
+        self.tension_frame.pack(padx=10, pady=5)
+
+
+        for idx, tension in enumerate(self.tension_options):
+            btn = ttk.Button(
+                self.tension_frame,
+                text=str(tension),
+                width=6,
+                command=lambda t=tension: self.set_tension(t)
+            )
+            row = idx // 3
+            col = idx % 3
+            btn.grid(row=row, column=col, padx=2, pady=2)
 
         self.log_text = tk.Text(root, height=10, width=40)
         self.log_text.pack(padx=10, pady=5)
@@ -231,6 +248,8 @@ class SuspendedPlayer:
         self.log_text.insert(tk.END, f"Tension changed to: {current_tension:.3f}\n")
         self.log_text.see(tk.END)
 
+    def set_tension(self, tension):
+        current_tension = float(tension)
         new_chunk = self.get_tension_chunk(current_tension)
         new_chord = None
         if new_chunk != self.current_chunk:
