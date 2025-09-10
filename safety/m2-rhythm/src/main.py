@@ -2,18 +2,19 @@
 """
 OSC Rhythm Pulse Sender
 -----------------------
-Sends brief pulses (1 then 0) to an OSC address (/rhythm) following one of three preset rhythms.
-You can switch rhythms from the terminal by pressing 1, 2, or 3. The change takes effect only
+Sends MIDI note impulses over OSC to your JUCE plugin's OSC→MIDI bridge.
+You can switch rhythms from the terminal by pressing 1–4. The change takes effect only
 after the current rhythm finishes its loop. Press 'q' to quit.
 
 Usage:
   python rhythm_osc.py --ip 127.0.0.1 --port 9000 --bpm 120 --pulse-width 0.02
+  python rhythm_osc.py --ip 127.0.0.1 --port 9000 --bpm 120 --pulse-width 0.02 --midi-note 60 --velocity 0.9 --channel 1
 
 Requires:
   pip install python-osc
 
 Notes:
-- Pulses are sent as 1 followed by 0 at /rhythm. Pulse width is in seconds.
+- MIDI impulses are sent as `/note <note> <velocity01> <durationSec> [channel]` (default address `/note`).
 - Rhythms are defined as sequences of IOIs (inter-onset intervals) in *beats*;
   the sum of each pattern equals one bar. BPM maps beats -> seconds.
 """
@@ -48,7 +49,10 @@ class RhythmEngine:
     port: int
     bpm: float
     pulse_width: float
-    address: str = "/rhythm"
+    midi_note: int
+    velocity01: float
+    channel: int
+    address: str = "/note"
     client: SimpleUDPClient = field(init=False)
     stop_event: threading.Event = field(default_factory=threading.Event, init=False)
     pattern_key: str = field(default=DEFAULT_PATTERN_KEY, init=False)
@@ -78,15 +82,15 @@ class RhythmEngine:
                 print(f"[switched] Now playing pattern {self.pattern_key}.")
 
     def pulse(self):
-        # Send 1 then 0 separated by pulse_width
-        self.client.send_message(self.address, 1.0)
-        time.sleep(self.pulse_width)
-        self.client.send_message(self.address, 0.0)
+        # Send a MIDI impulse via the JUCE bridge: /note <int note> <float vel01> <float duration> [int channel]
+        payload = [int(self.midi_note), float(self.velocity01), float(self.pulse_width), int(self.channel)]
+        print(f"Sending payload @ {self.port}:", payload)
+        self.client.send_message(self.address, payload)
 
     def play_loop(self):
         print(f"Sending OSC to {self.ip}:{self.port} at {self.address}")
-        print(f"Starting with pattern {self.pattern_key} @ {self.bpm} BPM. Pulse width: {self.pulse_width:.3f}s")
-        print("Controls: [1]-[4] to queue pattern change (applies after bar), 'q' to quit.\n")
+        print(f"Starting with pattern {self.pattern_key} @ {self.bpm} BPM → MIDI note {self.midi_note} (vel {self.velocity01:.2f}, ch {self.channel}), duration {self.pulse_width:.3f}s")
+        print("Controls: [1]-[4] patterns | bpm <num> | pw <sec> | note <0-127> | vel <0..1> | chan <1-16> | q to quit\n")
 
         while not self.stop_event.is_set():
             pattern = PATTERNS_BEATS[self.pattern_key]
@@ -152,20 +156,66 @@ def input_thread(engine: RhythmEngine):
                     print("Usage: pw <seconds>")
             else:
                 print("Usage: pw <seconds>")
+        elif cmd.startswith("note"):
+            parts = cmd.split()
+            if len(parts) == 2:
+                try:
+                    n = int(parts[1])
+                    if 0 <= n <= 127:
+                        engine.midi_note = n
+                        print(f"[midi] Note set to {engine.midi_note}")
+                    else:
+                        print("Note must be 0..127")
+                except ValueError:
+                    print("Usage: note <0-127>")
+            else:
+                print("Usage: note <0-127>")
+        elif cmd.startswith("vel"):
+            parts = cmd.split()
+            if len(parts) == 2:
+                try:
+                    v = float(parts[1])
+                    if 0.0 <= v <= 1.0:
+                        engine.velocity01 = v
+                        print(f"[midi] Velocity set to {engine.velocity01:.2f}")
+                    else:
+                        print("Velocity must be between 0.0 and 1.0")
+                except ValueError:
+                    print("Usage: vel <0..1>")
+            else:
+                print("Usage: vel <0..1>")
+        elif cmd.startswith("chan"):
+            parts = cmd.split()
+            if len(parts) == 2:
+                try:
+                    c = int(parts[1])
+                    if 1 <= c <= 16:
+                        engine.channel = c
+                        print(f"[midi] Channel set to {engine.channel}")
+                    else:
+                        print("Channel must be 1..16")
+                except ValueError:
+                    print("Usage: chan <1-16>")
+            else:
+                print("Usage: chan <1-16>")
         else:
-            print("Commands: 1-5 | bpm <num> | pw <sec> | q")
+            print("Commands: 1-5 | bpm <num> | pw <sec> | note <0-127> | vel <0..1> | chan <1-16> | q")
 
 def main():
     parser = argparse.ArgumentParser(description="OSC rhythm pulse sender")
     parser.add_argument("--ip", type=str, default="127.0.0.1", help="OSC destination IP")
-    parser.add_argument("--port", type=int, default=9000, help="OSC destination port")
+    parser.add_argument("--port", type=int, default=20000, help="OSC destination port")
     parser.add_argument("--bpm", type=float, default=120.0, help="Tempo in BPM (quarter-note = 1 beat)")
     parser.add_argument("--pulse-width", type=float, default=0.1, help="Seconds to hold '1' before returning to '0'")
-    parser.add_argument("--address", type=str, default="/rhythm", help="OSC address for pulses")
+    parser.add_argument("--address", type=str, default="/note", help="OSC address for pulses")
+    parser.add_argument("--midi-note", type=int, default=51, help="MIDI note number (0-127)")
+    parser.add_argument("--velocity", type=float, default=1.0, help="MIDI velocity in 0..1")
+    parser.add_argument("--channel", type=int, default=1, help="MIDI channel (1-16)")
     args = parser.parse_args()
 
     engine = RhythmEngine(
-        ip=args.ip, port=args.port, bpm=args.bpm, pulse_width=args.pulse_width, address=args.address
+        ip=args.ip, port=args.port, bpm=args.bpm, pulse_width=args.pulse_width, address=args.address,
+        midi_note=args.midi_note, velocity01=args.velocity, channel=args.channel
     )
 
     # Handle force quit

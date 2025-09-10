@@ -23,12 +23,20 @@ AutomatorAudioProcessor::AutomatorAudioProcessor()
 #endif
     , parameters(*this, nullptr, "PARAMETERS", createParameterLayout()) // CURRENT PORT
 {
+    isConnected = false;
     int port = parameters.getParameterAsValue("port").getValue();
     if (port) {
         if (!connect(port)) {
             DBG("Failed to connect to port " + std::to_string(port));
         } else {
             DBG("Connected to port " + std::to_string(port));
+            OSCReceiver::addListener(this, "/on");
+            OSCReceiver::addListener(this, "/rhythm");
+            OSCReceiver::addListener(this, "/pitch");
+            OSCReceiver::addListener(this, "/melody");
+            OSCReceiver::addListener(this, "/note");
+            OSCReceiver::addListener(this, "/noteOn");
+            OSCReceiver::addListener(this, "/noteOff");
         }
     }
     
@@ -60,8 +68,8 @@ int AutomatorAudioProcessor::attemptConnection()
     DBG("Attempting to connect to port " << port);
     if (!connect(port))
     {
-        return 2;
         DBG("Failed to connect to port " << port);
+        return 2;
     }
     else
     {
@@ -71,6 +79,9 @@ int AutomatorAudioProcessor::attemptConnection()
         OSCReceiver::addListener(this, "/rhythm");
         OSCReceiver::addListener(this, "/pitch");
         OSCReceiver::addListener(this, "/melody");
+        OSCReceiver::addListener(this, "/note");
+        OSCReceiver::addListener(this, "/noteOn");
+        OSCReceiver::addListener(this, "/noteOff");
         isConnected = true;
     }
     
@@ -78,6 +89,29 @@ int AutomatorAudioProcessor::attemptConnection()
 }
 
 //==============================================================================
+
+void AutomatorAudioProcessor::enqueueImmediate (const juce::MidiMessage& msg, double timestampSeconds)
+{
+    juce::MidiMessage m = msg;
+    m.setTimeStamp(timestampSeconds);
+    midiCollector.addMessageToQueue(m);
+}
+
+void AutomatorAudioProcessor::enqueueNoteImpulse (int midiNote, float velocity01, double durationSeconds, int channel)
+{
+    const double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
+    const uint velocity = (uint) juce::jlimit(0, 127, (int) juce::roundToInt(velocity01 * 127.0f));
+
+    // Note On now
+    enqueueImmediate(juce::MidiMessage::noteOn(channel, midiNote, (juce::uint8) velocity), now);
+
+    // Note Off after duration
+    const double offTime = now + juce::jmax(0.0, durationSeconds);
+    enqueueImmediate(juce::MidiMessage::noteOff(channel, midiNote), offTime);
+}
+
+//==============================================================================
+
 juce::AudioProcessorValueTreeState::ParameterLayout AutomatorAudioProcessor::createParameterLayout()
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
@@ -127,17 +161,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout AutomatorAudioProcessor::cre
 //        {
 //            // Message -> float
 //            float value = std::stof(message);
-//            
+//
 //            // Bound it to ensure no errors for now
 //            value = juce::jlimit(0.0f, 1.0f, value);
-//            
+//
 //            juce::MessageManager::callAsync([this, value]() {
 //                parameters.getParameterAsValue("automation").setValue(value);
 //            });
-//            
+//
 //            DBG("Received UDP message: " << message);
 //        }
-//        
+//
 //        // 😂
 //        wait(10);
 //    }
@@ -146,15 +180,105 @@ juce::AudioProcessorValueTreeState::ParameterLayout AutomatorAudioProcessor::cre
 void AutomatorAudioProcessor::oscMessageReceived(const juce::OSCMessage& message)
 {
     DBG("<TMP> Some message was just recieved.");
+    // Verbose OSC diagnostics
+    DBG("[OSC] addr=" + message.getAddressPattern().toString() + ", size=" + juce::String(message.size()));
+    for (int i = 0; i < message.size(); ++i)
+    {
+        const auto& arg = message[i];
+        juce::String t, v;
+
+        if (arg.isInt32())
+        {
+            t = "int32";
+            v = juce::String(arg.getInt32());
+        }
+        else if (arg.isFloat32())
+        {
+            t = "float32";
+            v = juce::String(arg.getFloat32());
+        }
+        else if (arg.isString())
+        {
+            t = "string";
+            v = arg.getString();
+        }
+        else if (arg.isBlob())
+        {
+            t = "blob";
+            v = "<blob data>";
+        }
+        else
+        {
+            t = "unknown";
+            v = "<unsupported>";
+        }
+
+        DBG("arg[" + juce::String(i) + "] type=" + t + " value=" + v);
+    }
+    juce::OSCAddressPattern addr = message.getAddressPattern();
     
-    if (message.size() != 1 || (!message[0].isFloat32())) {
-        DBG("Data sent is not in the proper format.");
+    // --- MIDI via OSC ---
+    if (addr == juce::OSCAddressPattern("/note"))
+    {
+        // Formats supported:
+        //   /note <int: noteNumber> <float: velocity01> <float: durationSeconds> [<int: channel=1>]
+        //   /note <int: noteNumber> <float: velocity01>                            (impulse with 0.1s default)
+        if (message.size() < 2 || !message[0].isInt32() || !message[1].isFloat32())
+        {
+            DBG("/note expects: int note, float velocity01, [float durationSec], [int channel]");
+            return;
+        }
+        const int note = juce::jlimit(0, 127, message[0].getInt32());
+        const float vel01 = juce::jlimit(0.0f, 1.0f, message[1].getFloat32());
+        const double dur = (message.size() >= 3 && message[2].isFloat32()) ? (double) message[2].getFloat32() : 0.1; // default 100ms impulse
+        const int channel = (message.size() >= 4 && message[3].isInt32()) ? juce::jlimit(1, 16, message[3].getInt32()) : 1;
+
+        enqueueNoteImpulse(note, vel01, dur, channel);
+        return;
+    }
+    else if (addr == juce::OSCAddressPattern("/noteOn"))
+    {
+        // /noteOn <int: noteNumber> <float: velocity01> [<int: channel=1>]
+        if (message.size() < 2 || !message[0].isInt32() || !message[1].isFloat32())
+        {
+            DBG("/noteOn expects: int note, float velocity01, [int channel]");
+            return;
+        }
+        const int note = juce::jlimit(0, 127, message[0].getInt32());
+        const float vel01 = juce::jlimit(0.0f, 1.0f, message[1].getFloat32());
+        const int channel = (message.size() >= 3 && message[2].isInt32()) ? juce::jlimit(1, 16, message[2].getInt32()) : 1;
+
+        const double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
+        const uint velocity = (uint) juce::jlimit(0, 127, (int) juce::roundToInt(vel01 * 127.0f));
+        enqueueImmediate(juce::MidiMessage::noteOn(channel, note, (juce::uint8) velocity), now);
+        return;
+    }
+    else if (addr == juce::OSCAddressPattern("/noteOff"))
+    {
+        // /noteOff <int: noteNumber> [<int: channel=1>]
+        if (message.size() < 1 || !message[0].isInt32())
+        {
+            DBG("/noteOff expects: int note, [int channel]");
+            return;
+        }
+        const int note = juce::jlimit(0, 127, message[0].getInt32());
+        const int channel = (message.size() >= 2 && message[1].isInt32()) ? juce::jlimit(1, 16, message[1].getInt32()) : 1;
+
+        const double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
+        enqueueImmediate(juce::MidiMessage::noteOff(channel, note), now);
         return;
     }
     
-    juce::OSCAddressPattern addr = message.getAddressPattern();
-    
-    
+    // Parameter-style messages expect a single float
+    if (addr == juce::OSCAddressPattern("/on") || addr == juce::OSCAddressPattern("/rhythm") ||
+        addr == juce::OSCAddressPattern("/pitch") || addr == juce::OSCAddressPattern("/melody"))
+    {
+        if (message.size() != 1 || !message[0].isFloat32())
+        {
+            DBG("Parameter messages expect a single float arg.");
+            return;
+        }
+    }
     
     juce::String param;
     
@@ -263,6 +387,8 @@ void AutomatorAudioProcessor::changeProgramName (int index, const juce::String& 
 //==============================================================================
 void AutomatorAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
+    midiCollector.reset(sampleRate);
+
     // Use this method as the place to do any pre-playback
     // initialisation that you need..
     int port = parameters.getParameterAsValue("port").getValue();
@@ -271,6 +397,13 @@ void AutomatorAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
             DBG("Failed to connect to port " + std::to_string(port));
         } else {
             DBG("Connected to port " + std::to_string(port));
+            OSCReceiver::addListener(this, "/on");
+            OSCReceiver::addListener(this, "/rhythm");
+            OSCReceiver::addListener(this, "/pitch");
+            OSCReceiver::addListener(this, "/melody");
+            OSCReceiver::addListener(this, "/note");
+            OSCReceiver::addListener(this, "/noteOn");
+            OSCReceiver::addListener(this, "/noteOff");
         }
     }
 }
@@ -310,6 +443,8 @@ bool AutomatorAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts
 void AutomatorAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
+    midiCollector.removeNextBlockOfMessages(midiMessages, buffer.getNumSamples());
+
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
 

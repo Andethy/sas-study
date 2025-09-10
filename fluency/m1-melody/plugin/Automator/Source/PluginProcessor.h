@@ -72,7 +72,12 @@ private:
 //    void run() override;
 //    AutomatorAudioProcessorEditor* editor = nullptr;
     
-    bool isConnected;
+    bool isConnected { false };
+
+    juce::MidiMessageCollector midiCollector;
+    
+    void enqueueNoteImpulse (int midiNote, float velocity01, double durationSeconds, int channel = 1);
+    void enqueueImmediate (const juce::MidiMessage& msg, double timestampSeconds);
     
     void oscMessageReceived (const juce::OSCMessage& message) override;
     
