@@ -51,7 +51,10 @@ void MOSCAudioProcessor::changeProgramName (int, const juce::String&) {}
 
 void MOSCAudioProcessor::prepareToPlay (double sampleRate, int /*samplesPerBlock*/)
 {
-    currentSampleRate.store (sampleRate);
+    currentSampleRate.store(sampleRate);
+    logicalSamplePos.store(0);
+    lastHostSamplePos.store(-1);
+    currentHostSamplePos.store(0);
     connectOSC();
 }
 
@@ -90,24 +93,57 @@ void MOSCAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                                        juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
-
-    // Update host position
-    if (auto* ph = getPlayHead())
+    const int numSamples = buffer.getNumSamples();
+    
+    if (numSamples <= 0)
     {
-        juce::AudioPlayHead::CurrentPositionInfo pos;
-        
-        if (ph->getCurrentPosition (pos))
-            currentHostSamplePos.store ((juce::int64) pos.timeInSamples);
+        // Don’t touch MIDI buffer with offsets; just publish timeline and leave.
+        const auto blockStart = logicalSamplePos.load();
+        currentHostSamplePos.store(blockStart);
+        // do NOT advance logicalSamplePos by 0 (harmless either way)
+        buffer.clear();
+        return;
     }
 
-    const int numSamples = buffer.getNumSamples();
-    const juce::int64 blockStart = currentHostSamplePos.load();
+    // Start from our always-advancing logical clock.
+    juce::int64 blockStart = logicalSamplePos.load();
 
-    // Drain any scheduled MIDI that falls inside this block
-    drainEventsIntoBlock (midi, numSamples, blockStart);
+    if (auto* ph = getPlayHead())
+    {
+        if (auto posOpt = ph->getPosition()) // std::optional<PositionInfo>
+        {
+            auto& pos = *posOpt;
 
-    // NOTE: No audio processing; this is a MIDI effect.
-    buffer.clear();
+            // JUCE Optional types in your build:
+            auto timeInSamplesOpt = pos.getTimeInSamples(); // juce::Optional<juce::int64>
+            auto isPlayingOpt     = pos.getIsPlaying();     // juce::Optional<bool>
+
+            // Only trust host timeline if both are set and playing.
+            if (timeInSamplesOpt.hasValue() && isPlayingOpt)
+            {
+                const auto hostPos = (juce::int64)*timeInSamplesOpt;
+                const auto last    = lastHostSamplePos.load();
+
+                // Only snap when the host is actually advancing.
+                if (hostPos != last)
+                {
+                    blockStart = hostPos;
+                    logicalSamplePos.store(hostPos);
+                    lastHostSamplePos.store(hostPos);
+                }
+            }
+        }
+    }
+
+    // Publish unified timeline and advance it by the block size.
+    currentHostSamplePos.store(blockStart);
+    logicalSamplePos.store(blockStart + numSamples);
+
+    // Drain everything scheduled before the end of this block (late => offset 0).
+    drainEventsIntoBlock(midi, numSamples, blockStart);
+
+    buffer.clear(); // MIDI effect: no audio
+
 }
 
 //==============================================================================
@@ -119,8 +155,19 @@ juce::AudioProcessorEditor* MOSCAudioProcessor::createEditor()    { return new M
 //==============================================================================
 // State
 
-void MOSCAudioProcessor::getStateInformation (juce::MemoryBlock& /*destData*/) {}
-void MOSCAudioProcessor::setStateInformation (const void* /*data*/, int /*sizeInBytes*/) {}
+void MOSCAudioProcessor::getStateInformation (juce::MemoryBlock& destData) {
+    juce::MemoryOutputStream mos(destData, true);
+    mos.writeInt(oscInPort.load());   // v1: just an int
+}
+void MOSCAudioProcessor::setStateInformation (const void* data, int sizeInBytes) {
+    if (sizeInBytes >= 4)
+    {
+        juce::MemoryInputStream mis(data, (size_t)sizeInBytes, false);
+        const int savedPort = mis.readInt();
+        oscInPort.store(savedPort);
+        connectOSC();                 // try to connect on project load
+    }
+}
 
 //==============================================================================
 // OSC
@@ -128,37 +175,37 @@ void MOSCAudioProcessor::setStateInformation (const void* /*data*/, int /*sizeIn
 void MOSCAudioProcessor::setOscInPort(int port)
 {
     if (port != oscInPort.load())
-    {
         oscInPort.store(port);
-        if (oscConnected.load())
-        {
-            // Reconnect with new port
-            connectOSC();
-        }
-    }
+    connectOSC();
 }
 
 bool MOSCAudioProcessor::connectOSC()
 {
     disconnectOSC();
-    
+
     const int port = oscInPort.load();
-    if (connect(port)) 
+    if (port <= 0 || port > 65535)
+    {
+        lastError = "Invalid port: " + juce::String(port);
+        DBG(lastError);
+        oscConnected.store(false);
+        return false;
+    }
+
+    if (connect(port)) // JUCE OSCReceiver::connect
     {
         OSCReceiver::addListener(this, "/note");
         OSCReceiver::addListener(this, "/cc");
         oscConnected.store(true);
-        lastError = "";
+        lastError = {};
         DBG("OSC connected on port " + juce::String(port));
         return true;
     }
-    else
-    {
-        oscConnected.store(false);
-        lastError = "Failed to connect to port " + juce::String(port);
-        DBG(lastError);
-        return false;
-    }
+
+    oscConnected.store(false);
+    lastError = "Failed to bind port " + juce::String(port) + " (in use?)";
+    DBG(lastError);
+    return false;
 }
 
 void MOSCAudioProcessor::disconnectOSC()
@@ -231,50 +278,63 @@ void MOSCAudioProcessor::enqueueEvent (const juce::MidiMessage& msg, juce::int64
                                 [] (const TimedMidiEvent& a, const TimedMidiEvent& b)
                                 { return a.sampleTime < b.sampleTime; });
     pending.insert (it, std::move (e));
+    
+    DBG("Enqueued MIDI event: " + msg.getDescription() + " at sample " + juce::String(whenSamples) + " (queue size: " + juce::String(pending.size()) + ")");
 }
 
 void MOSCAudioProcessor::enqueueNoteImpulse (int note, float velocity01, double durationSeconds, int channel)
 {
     const auto sr = currentSampleRate.load();
     const auto nowSamples = currentHostSamplePos.load();
+    const int safety = 32; // a few samples delay to trigger multiple bundled OSC messages simultaneously
     
     const juce::uint8 velocity = (juce::uint8) juce::roundToInt(velocity01 * 127.0f);
     const juce::int64 durationSamples = (juce::int64) juce::roundToInt(durationSeconds * sr);
     
-    // Schedule note on immediately
-    enqueueEvent(juce::MidiMessage::noteOn(channel, note, velocity), nowSamples);
+    DBG("Enqueueing note: " + juce::String(note) + " vel:" + juce::String(velocity) + " dur:" + juce::String(durationSeconds) + " ch:" + juce::String(channel));
+    DBG("Sample rate: " + juce::String(sr) + ", current sample pos: " + juce::String(nowSamples));
+    
+    // Schedule note on immediately (use current sample position or slightly ahead)
+    const juce::int64 noteOnTime = nowSamples + safety;
+    enqueueEvent(juce::MidiMessage::noteOn(channel, note, velocity), noteOnTime);
     
     // Schedule note off after duration
-    enqueueEvent(juce::MidiMessage::noteOff(channel, note), nowSamples + durationSamples);
+    const juce::int64 noteOffTime = noteOnTime + durationSamples;
+    enqueueEvent(juce::MidiMessage::noteOff(channel, note), noteOffTime);
 }
 
 void MOSCAudioProcessor::drainEventsIntoBlock (juce::MidiBuffer& midi, int numSamples, juce::int64 blockStartSamples)
 {
+    if (numSamples <= 0) return;
+    
     const juce::int64 blockEnd = blockStartSamples + numSamples;
 
-    // Move due events to a local vector (minimise lock time)
     std::vector<TimedMidiEvent> due;
     {
-        const juce::SpinLock::ScopedTryLockType tl (pendingLock);
-        if (tl.isLocked())
+        const juce::SpinLock::ScopedLockType sl (pendingLock);
+
+        if (!pending.empty())
         {
-            auto firstFuture = std::lower_bound (pending.begin(), pending.end(), blockStartSamples,
-                                                 [] (const TimedMidiEvent& e, juce::int64 t)
-                                                 { return e.sampleTime < t; });
+            // Take everything scheduled strictly before blockEnd
+            auto endIt = std::lower_bound (pending.begin(), pending.end(), blockEnd,
+                                           [] (const TimedMidiEvent& e, juce::int64 t)
+                                           { return e.sampleTime < t; });
 
-            auto inBlockEnd  = std::lower_bound (firstFuture, pending.end(), blockEnd,
-                                                 [] (const TimedMidiEvent& e, juce::int64 t)
-                                                 { return e.sampleTime < t; });
-
-            due.assign (firstFuture, inBlockEnd);
-            pending.erase (firstFuture, inBlockEnd);
+            if (endIt != pending.begin())
+            {
+                due.assign (pending.begin(), endIt);
+                pending.erase (pending.begin(), endIt);
+            }
         }
     }
 
     for (const auto& e : due)
     {
-        const int offset = (int) juce::jlimit<juce::int64> (0, numSamples - 1, e.sampleTime - blockStartSamples);
+        // Late events go at offset 0; future-in-block get proper offset
+        const juce::int64 rawOffset = e.sampleTime - blockStartSamples;
+        const int offset = (int) juce::jlimit<juce::int64>(0, numSamples - 1, rawOffset);
         midi.addEvent (e.msg, offset);
+        DBG("Added MIDI event at offset " + juce::String(offset) + ": " + e.msg.getDescription());
     }
 }
 

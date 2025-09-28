@@ -80,6 +80,8 @@ private:
     // Host timing
     std::atomic<juce::int64> currentHostSamplePos { 0 };
     std::atomic<double> currentSampleRate { 44100.0 };
+    std::atomic<juce::int64> logicalSamplePos { 0 }; // always advances
+    std::atomic<juce::int64> lastHostSamplePos { -1 };
 
     // Pending MIDI events, protected by a spin lock (simple & adequate skeleton).
     juce::SpinLock pendingLock;
