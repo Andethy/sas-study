@@ -13,18 +13,18 @@ def test_note_messages(client):
     print("Testing /note messages...")
     
     # Basic note with default duration (0.1s)
-    print("  Sending: /note 60 0.8")
-    client.send_message("/note", [60, 0.8])
+    print("  Sending: /note 36 0.8")
+    client.send_message("/note", [36, 0.8])
     time.sleep(0.5)
     
     # Note with custom duration
-    print("  Sending: /note 64 0.6 0.5")
-    client.send_message("/note", [64, 0.6, 0.5])
+    print("  Sending: /note 36 0.6 0.5")
+    client.send_message("/note", [36, 0.6, 0.5])
     time.sleep(1.0)
     
     # Note with custom duration and channel
-    print("  Sending: /note 67 0.9 0.3 2")
-    client.send_message("/note", [67, 0.9, 0.3, 2])
+    print("  Sending: /note 36 0.9 0.3 2")
+    client.send_message("/note", [36, 0.9, 0.3, 2])
     time.sleep(0.8)
     
     # Chord

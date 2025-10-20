@@ -460,7 +460,7 @@ class StaticPlayerV2:
 
         threading.Thread(target=run_robot, daemon=True).start()
 
-if __name__ == "__main__":
+if __name__ == "__main__": # SOTA in this
     root = tk.Tk()
     if sys.argv[1] == 'static':
         StaticPlayerV2(root)

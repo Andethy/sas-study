@@ -26,7 +26,7 @@ MOSCAudioProcessorEditor::MOSCAudioProcessorEditor (MOSCAudioProcessor& p)
     portEditor.setInputRestrictions(5, "0123456789");
     
     addAndMakeVisible(connectButton);
-    connectButton.setButtonText("Reconnect");
+    connectButton.setButtonText("Reconnect 🔁");
     connectButton.onClick = [this]() {
         int newPort = portEditor.getText().getIntValue();
         if (newPort > 0 && newPort <= 65535) {

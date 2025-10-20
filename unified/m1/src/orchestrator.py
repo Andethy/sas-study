@@ -1,315 +1,442 @@
-import asyncio, time, random
+# orchestrator.py
+import asyncio
+import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Optional, Iterable, Any, Union
+from typing import Dict, List, Optional, Iterable, Union, Callable
+
+# ---- External deps you already have ----
 import common.midi as md
 from melody import HarmonyGenerator
 from common.osc import OSCManager
 
+# Re-export md so you can `from orchestrator import md` in main.py
+__all__ = ["GlobalConfig", "PortRegistry", "Orchestrator", "md"]
+
 Scalar = Union[int, float, str, bytes, bool]
 Arg = Union[Scalar, Iterable[Scalar]]
 
-# class HarmonyAdapter:
-#     """
-#     Thin adapter around the prior HarmonyGenerator.
-#     We only need a 'choose_next_chord' that respects zone tensions.
-#     """
-#     def __init__(self, key_root: str = "C"):
-#         self.hg = HarmonyGenerator(key_root)
-#
-#     def choose_next_chord(self, zone_tension: Dict[int, float]) -> str:
-#         """
-#         Choose a chord biased by the max (or weighted) zone tension.
-#         Returns chord name like 'C_M' compatible with your midi.py sets.
-#         """
-#         # You can swap this with your composite weighting strategy.
-#         tvals = list(zone_tension.values())
-#         tmax = max(tvals) if tvals else 0.0
-#         # Delegate to HG’s tension-based selector; previous chord tracking internally
-#         return self.hg.select_chord_by_tension(tmax)
-#
-#     def chord_tones(self, chord: str) -> List[int]:
-#         return self.hg.chord_to_list(chord)
-
-
-# ---- Global state ----
+# =========================
+#         CORE
+# =========================
 
 @dataclass
-class State:
+class GlobalConfig:
     addr: str = "127.0.0.1"
-    ports: Dict[str, int] = field(default_factory=lambda: {
-        "drums": 9000,
-        "zone1": 9001,
-        "zone2": 9002,
-        "zone3": 9003,
-    })
-    channels: Dict[str, int] = field(default_factory=lambda: {
-        "drums": 10,  # GM drums
-        "zone1": 10,
-        "zone2": 2,
-        "zone3": 3,
-    })
     bpm: float = 120.0
     beats_per_bar: int = 4
-    chord_span_beats: int = 4  # change chord every N beats
-    key_root: str = "C"        # 'C','D#', etc.
+    sub_per_beat: int = 4             # 16ths
+    key_root: str = "C"
     scale_name: str = "major"
-    tonic_center: int = md.note_to_int("C4")  # central register anchor for voicing
-    zone_registers: Dict[str, int] = field(default_factory=lambda: {
-        "zone1": md.note_to_int("C3"),
-        "zone2": md.note_to_int("C4"),
-        "zone3": md.note_to_int("C5"),
-    })
-    zone_tension: Dict[str, float] = field(default_factory=lambda: {
-        "zone1": 0.0, "zone2": 0.0, "zone3": 0.0
-    })
-    drum_map: Dict[str, int] = field(default_factory=lambda: {
-        "kick":36, "snare":38, "chh":44, "ohh":43, "clap":39, "ride":51, "tom":45
-    })
-    running: bool = True
+    channels: Dict[str, int] = field(default_factory=dict)   # instrument_id -> MIDI channel
+    registers: Dict[str, int] = field(default_factory=dict)  # instrument_id -> target register (MIDI note)
 
-# ---- Time / clock ----
+@dataclass
+class PortRegistry:
+    ports: Dict[str, int]
+
+    def add(self, instrument_id: str, port: int):
+        self.ports[instrument_id] = port
+
+    def get(self, instrument_id: str) -> int:
+        return self.ports[instrument_id]
+
+# ------------------------- Transport -------------------------
+
+@dataclass
+class OscMessage:
+    port: int
+    address: str
+    args: List[Arg]
+
+Middleware = Callable[[OscMessage], Optional[OscMessage]]
+
+class Transport:
+    """
+    OSC out with middleware. Provides:
+    - send_now(): synchronous (grid-critical)
+    - send(): async (non-critical)
+    """
+    def __init__(self, addr: str, ports: Iterable[int]):
+        # Materialize to a list before splatting to avoid iterator pitfalls.
+        port_list = list(ports)
+        self._osc = OSCManager(addr, *port_list)
+        self._middleware: List[Middleware] = []
+        self._lock = asyncio.Lock()
+
+    def add_middleware(self, fn: Middleware):
+        self._middleware.append(fn)
+
+    def _apply_mw(self, msg: OscMessage) -> Optional[OscMessage]:
+        out = msg
+        for mw in self._middleware:
+            out = mw(out)
+            if out is None:
+                return None
+        return out
+
+    def send_now(self, msg: OscMessage):
+        out = self._apply_mw(msg)
+        if out is not None:
+            self._osc(out.port, out.address, out.args)
+
+    async def send(self, msg: OscMessage):
+        async with self._lock:
+            out = self._apply_mw(msg)
+            if out is not None:
+                self._osc(out.port, out.address, out.args)
+
+# ------------------------- Tempo Clock -------------------------
 
 class TempoClock:
-    def __init__(self, state: State):
-        self.state = state
+    """Beat-accurate async ticker yielding (beat, sub) with live BPM updates."""
+    def __init__(self, cfg: GlobalConfig):
+        self.cfg = cfg
+        self._running = True
         self.t0 = time.perf_counter()
         self.beat0 = 0.0
 
-    async def ticker(self, sub_per_beat: int = 4):
-        beat = 0
-        sub = 0
-        while self.state.running:
-            spb = 60.0 / max(20.0, min(240.0, self.state.bpm))
-            target_time = self.t0 + (beat + sub / sub_per_beat - self.beat0) * spb
-            delay = max(0.0, target_time - time.perf_counter())
+    def stop(self):
+        self._running = False
+
+    async def ticker(self):
+        beat, sub = 0, 0
+        while self._running:
+            spb = 60.0 / max(20.0, min(240.0, self.cfg.bpm))
+            target = self.t0 + (beat + sub / self.cfg.sub_per_beat - self.beat0) * spb
+            delay = max(0.0, target - time.perf_counter())
             if delay > 0:
                 await asyncio.sleep(delay)
             yield beat, sub
             sub += 1
-            if sub >= sub_per_beat:
+            if sub >= self.cfg.sub_per_beat:
                 sub = 0
                 beat += 1
 
-# ---- Harmony adapter (wraps your HarmonyGenerator) ----
+# ------------------------- Scheduler -------------------------
 
-class HarmonyEngine:
-    def __init__(self, state: State):
-        self.state = state
-        self.hg = HarmonyGenerator(key=state.key_root)
-        self.prev_chord: Optional[str] = None  # e.g., 'C_M'
+class Scheduler:
+    """
+    Phased scheduler:
+    - on_downbeat: BAR downbeat only (sub==0 and beat%beats_per_bar==0) — commit point
+    - on_tick: every subdivision
+    - on_bar: informational hook at bar start (after downbeat commit)
+    """
+    def __init__(self, clock: TempoClock, cfg: GlobalConfig):
+        self.clock, self.cfg = clock, cfg
+        self._downbeat_handlers: List[Callable[[int], None]] = []
+        self._tick_handlers: List[Callable[[int, int], None]] = []
+        self._bar_handlers: List[Callable[[int], None]] = []
 
-    def next_chord(self, max_tension: float) -> str:
-        """Use your select_chord_by_tension; default to 'C_M' at low tension."""
-        chord = self.hg.select_chord_by_tension(
-            current_tension=max_tension,
-            previous_chord=self.prev_chord,
-            lambda_balance=1.0,
-            k=4
-        ) if max_tension > 0 else f"{self.state.key_root}_M"
-        self.prev_chord = chord
-        return chord
+    def on_downbeat(self, fn: Callable[[int], None]): self._downbeat_handlers.append(fn)
+    def on_tick(self, fn: Callable[[int, int], None]): self._tick_handlers.append(fn)
+    def on_bar(self, fn: Callable[[int], None]): self._bar_handlers.append(fn)
+
+    async def run(self):
+        async for beat, sub in self.clock.ticker():
+            bpb = self.cfg.beats_per_bar
+
+            # BAR DOWNBEAT = commit point
+            if sub == 0 and (beat % bpb == 0):
+                bar_idx = beat // bpb
+                for fn in list(self._downbeat_handlers):
+                    fn(bar_idx)
+                for fn in list(self._bar_handlers):
+                    fn(bar_idx)
+
+            # Subdivision phase
+            for fn in list(self._tick_handlers):
+                fn(beat, sub)
+
+# =========================
+#       INSTRUMENTS
+# =========================
+
+class Instrument:
+    def __init__(self, instrument_id: str, cfg: GlobalConfig, ports: PortRegistry, tx: Transport):
+        self.id, self.cfg, self.ports, self.tx = instrument_id, cfg, ports, tx
+
+    def channel(self) -> int:
+        return self.cfg.channels.get(self.id, 1)
+
+    def register_center(self) -> int:
+        return self.cfg.registers.get(self.id, md.note_to_int("C4"))
+
+    def note_now(self, n: int, vel: float, dur: float):
+        self.tx.send_now(OscMessage(self.ports.get(self.id), "/note", [int(n), float(vel), float(dur), int(self.channel())]))
+
+    async def note_async(self, n: int, vel: float, dur: float):
+        await self.tx.send(OscMessage(self.ports.get(self.id), "/note", [int(n), float(vel), float(dur), int(self.channel())]))
+
+# ---------- Percussive ----------
+
+from dataclasses import dataclass as _dc  # avoid name clash above
+
+@_dc
+class DrumSpec:
+    mapping: Dict[str, int] = field(default_factory=lambda: {
+        "kick":36, "snare":38, "chh":44, "ohh":46, "clap":39, "ride":51, "tom":45
+    })
+    base_vel: Dict[str, float] = field(default_factory=lambda: {
+        "kick":0.85, "snare":0.8, "chh":0.6, "ohh":0.7, "clap":0.8, "ride":0.9, "tom":0.8
+    })
+
+class PercussiveInstrument(Instrument):
+    """
+    16-step default pattern in 4/4. Supports:
+    - set_pattern(steps)
+    - queue_fill_beats(fill_len_beats, preset='snare'|'toms'|'hats' or steps=list)
+      Fill starts exactly `fill_len_beats` before next bar, ends on the downbeat.
+    """
+    def __init__(self, instrument_id: str, cfg: GlobalConfig, ports: PortRegistry, tx: Transport, spec: Optional[DrumSpec]=None):
+        super().__init__(instrument_id, cfg, ports, tx)
+        self.spec = spec or DrumSpec()
+        self.pattern: List[Dict[str,int]] = [
+            {"kick":1, "chh":1}, {}, {}, {},
+            {"chh":1}, {}, {}, {},
+            {"snare":1, "chh":1}, {}, {}, {},
+            {"chh":1}, {}, {}, {},
+            {"kick":1, "chh":1}, {}, {}, {},
+            {"kick":1, "chh":1}, {}, {}, {},
+            {"snare":1, "chh":1}, {}, {}, {},
+            {"chh":1}, {}, {}, {},
+            {"kick":1, "chh":1}, {}, {}, {},
+            {"chh":1}, {}, {}, {},
+            {"snare":1, "chh":1}, {}, {}, {},
+            {"chh":1}, {}, {}, {},
+            {"kick":1, "chh":1}, {}, {}, {},
+            {"kick":1, "chh":1}, {}, {}, {},
+            {"snare":1, "chh":1}, {}, {}, {},
+            {"ohh":1}, {}, {}, {},
+        ]
+        self._pending_fill_beats: Optional[int] = None
+        self._fill_steps: Optional[List[Dict[str,int]]] = None
+        self._active_fill: Optional[List[Dict[str,int]]] = None
+
+    def set_pattern(self, steps: List[Dict[str,int]]):
+        self.pattern = steps
+
+    def _preset_fill(self, beats: int, preset: str) -> List[Dict[str,int]]:
+        steps = []
+        tmp = 0
+        for i in range(max(1, beats)):
+            if preset == "toms":
+                if tmp % 2 == 0:
+                    steps.extend([{"tom":1}, {}])
+                    steps.extend([{"tom":1}, {}])
+                else:
+                    steps.extend([{}, {}, {"tom": 1}, {}])
+                tmp += 1
+            elif preset == "hats":
+                steps.extend([{"chh":1}, {"chh":1}, {}, {"chh":1}])
+            elif preset == "snare":
+                for j in range(2):
+                    if tmp % 3 == 2:
+                        steps.extend([{"kick": 1}, {}])
+                    else:
+                        steps.extend([{"snare": 1}, {}])
+                    tmp += 1
+
+        steps.append({"ride":1, "kick": "1"})
+        return steps
+
+    def queue_fill_beats(self, fill_len_beats: int, preset: str = "snare", steps: Optional[List[Dict[str,int]]] = None):
+        self._pending_fill_beats = max(1, fill_len_beats)
+        self._fill_steps = steps if steps is not None else self._preset_fill(self._pending_fill_beats, preset)
+
+    def on_tick(self, beat: int, sub: int):
+        # Start fill X beats before next bar (check at quarter notes to reduce branching).
+        if sub == 0 and self._pending_fill_beats:
+            bpb = self.cfg.beats_per_bar
+            beats_to_bar = (bpb - (beat % bpb)) % bpb
+            if beats_to_bar == self._pending_fill_beats:
+                self._active_fill = list(self._fill_steps or [])
+                self._pending_fill_beats = None
+
+        # Fire pattern on every subdivision (16ths)
+        step16 = (beat * self.cfg.sub_per_beat + sub) % len(self.pattern)
+
+        # Fill overrides pattern while active
+        if self._active_fill:
+            step_dict = self._active_fill.pop(0)
+            if not self._active_fill:
+                self._active_fill = None
+        else:
+            step_dict = self.pattern[step16]
+
+        # Emit hits immediately (tight)
+        ch = self.channel()
+        port = self.ports.get(self.id)
+        for name, on in step_dict.items():
+            if not on:
+                continue
+            nn = self.spec.mapping.get(name, 36)
+            v  = min(1.0, self.spec.base_vel.get(name, 0.8))
+            self.tx.send_now(OscMessage(port, "/note", [nn, v, 0.05, ch]))
+
+    def on_downbeat(self, bar_idx: int):
+        # No-op; per-beat/per-sub handling is in on_tick
+        pass
+
+# ---------- Harmonic ----------
+
+class HarmonicInstrument(Instrument):
+    """
+    N voices -> N instrument_ids/ports (e.g., 'harm.voice1', 'harm.voice2', 'harm.voice3').
+    Default chord is selected from current max tension; can queue an override for next downbeat.
+    """
+    def __init__(self, instrument_id: str, cfg: GlobalConfig, ports: PortRegistry, tx: Transport,
+                 voice_ids: List[str], key_root: str):
+        super().__init__(instrument_id, cfg, ports, tx)
+        self.voice_ids = voice_ids
+        self.hg = HarmonyGenerator(key=key_root)
+        self._prev: Optional[str] = None
+        self._queued_next: Optional[str] = None
+        self._current_symbol: str = f"{cfg.key_root}_M"
+        self._current_notes: List[int] = []
+
+    def queue_next_chord(self, symbol: str):
+        self._queued_next = symbol
+
+    def _select_symbol(self, max_tension: float) -> str:
+        if self._queued_next:
+            sym = self._queued_next
+            self._queued_next = None
+            self._prev = sym
+            return sym
+        if max_tension > 0:
+            sym = self.hg.select_chord_by_tension(
+                current_tension=max_tension,
+                previous_chord=self._prev,
+                lambda_balance=1.0,
+                k=4
+            )
+        else:
+            sym = f"{self.cfg.key_root}_M"
+        self._prev = sym
+        return sym
 
     @staticmethod
-    def chord_to_midi(chord: str) -> List[int]:
-        # chord like 'C_M', use md.HARMONIES_SHORT intervals
-        root_str, ctype = chord.split('_')
+    def chord_to_pitches(symbol: str) -> List[int]:
+        root_str, ctype = symbol.split('_')
         root = md.note_to_int(root_str + "0")
         return [root + i for i in md.HARMONIES_SHORT[ctype]]
 
-# ---- Instruments ----
-
-class DrumKit:
-    def __init__(self, osc: OSCManager, state: State):
-        self.osc, self.state = osc, state
-        self.pattern = [
-            {"kick":1, "chh":1},
-            {"chh":1},
-            {"snare":1, "chh":1},
-            {"chh":1},
-            {"kick":1, "chh":1},
-            {"kick":1, "chh":1},
-            {"snare": 1, "chh": 1},
-            {"chh":1},
-        ]
-        self.fill_queue: Optional[List[Dict[str,int]]] = None
-
-    def queue_fill(self, steps: Optional[List[Dict[str,int]]] = None):
-        if steps is None:
-            steps = [{"snare":1} for _ in range(15)] + [{"ride":1, "snare":1}]
-        self.fill_queue = steps
-
-    def step(self, step16: int):
-        port = self.state.ports["drums"]
-        ch = self.state.channels["drums"]
-        pat = self.fill_queue.pop(0) if self.fill_queue else self.pattern[step16 % len(self.pattern)]
-        if self.fill_queue == []:
-            self.fill_queue = None
-        for name, on in pat.items():
-            if on:
-                nn = self.state.drum_map.get(name, 36)
-                # MOSC: /note [note, vel01, durSec, ch]
-                self.osc(port, "/note", [nn, 0.9, 0.05, ch])
-
-class MelodicVoice:
-    def __init__(self, zone_key: str, osc: OSCManager, state: State):
-        self.zone, self.osc, self.state = zone_key, osc, state
-        self.last_note: Optional[int] = None
-        self.hold_until: float = 0.0
-
-    def on_chord_stab(self, note: int):
-        port = self.state.ports[self.zone]
-        ch   = self.state.channels[self.zone]
-        self.osc(port, "/note", [note, 0.6, 0.12, ch])
-        self.last_note = note
-
-    def melodic_step(self, sub: int, chord_notes: List[int], scale_notes: List[int]):
-        # fire on 8ths
-        t = float(self.state.zone_tension.get(self.zone, 0.0))
-        if t < 1.0: return
-
-        if sub % 2: return
-        density = 0.3 + 0.7 * t
-        if random.random() > density: return
-        now = time.perf_counter()
-        if now < self.hold_until: return
-
-        center = self.state.zone_registers[self.zone]
-        step_choices = [-2,-1,0,1,2,3] if t < 0.5 else [-4,-2,-1,0,1,2,3,5]
-        base = self.last_note if self.last_note is not None else center
-        candidate = base + random.choice(step_choices)
-
-        # quantize to scale
-        target = min(scale_notes, key=lambda n: abs(n - candidate))
-        # maybe snap near chord
-        if random.random() < (0.6 + 0.3 * t):
-            target = min([p + 12*k for p in chord_notes for k in range(-2,3)], key=lambda n: abs(n - target))
-
-        port = self.state.ports[self.zone]
-        ch   = self.state.channels[self.zone]
-        vel  = 0.5 + 0.5 * t
-        dur  = 0.10 if t < 0.5 else 0.08
-        self.osc(port, "/note", [target, vel, dur, ch])
-        self.last_note = target
-        self.hold_until = now + dur * (1.1 if t < 0.5 else 0.9)
-
-# ---- Conductor ----
-
-class Conductor:
-    def __init__(self, state: State):
-        self.state = state
-        # Set up OSC across all ports (they can be on different MOSC instances)
-        self.osc = OSCManager(state.addr, *state.ports.values())
-        self.clock = TempoClock(state)
-        self.harmony = HarmonyEngine(state)
-        # Precompute scale notes around tonic center
-        tonic = md.note_to_int(state.key_root + "0")
-        scale = md.get_key_ints(state.key_root, state.scale_name)
-        self.scale_notes = sorted([tonic + d + 12*k for k in range(-2,8) for d in scale])
-        # Instruments
-        self.drums = DrumKit(self.osc, state)
-        self.voices = {
-            "zone1": MelodicVoice("zone1", self.osc, state),
-            "zone2": MelodicVoice("zone2", self.osc, state),
-            "zone3": MelodicVoice("zone3", self.osc, state),
-        }
-        self.current_chord_notes: List[int] = []
-        self.current_chord_symbol: str = "C_M"
-
-    def choose_and_voice_chord(self):
-        max_t = max(self.state.zone_tension.values()) if self.state.zone_tension else 0.0
-        symbol = self.harmony.next_chord(max_t)
-        base_notes = HarmonyEngine.chord_to_midi(symbol)  # e.g., [C0, E0, G0] or [C0,E0,G0,Bb0]
-        base_notes = sorted(base_notes)
-
-        # Pick distinct chord degrees for the three zones:
-        # - for triads: root, third, fifth
-        # - for 7ths+: root, third, seventh (keeps color on top)
-        if len(base_notes) >= 4:
-            degree_set = [base_notes[0], base_notes[1], base_notes[3]]  # R,3,7
-        elif len(base_notes) == 3:
-            degree_set = [base_notes[0], base_notes[1], base_notes[2]]  # R,3,5
-        elif len(base_notes) == 2:
-            degree_set = [base_notes[0], base_notes[1], base_notes[0]]  # duplicate if needed
+    def _voice_spread(self, base: List[int]) -> List[int]:
+        base = sorted(base)
+        # choose degrees R,3,7 if available else R,3,5
+        if len(base) >= 4:
+            degrees = [base[0], base[1], base[3]]
+        elif len(base) == 3:
+            degrees = base
         else:
-            degree_set = [base_notes[0], base_notes[0], base_notes[0]]  # single-note chord
+            degrees = base + base[:max(0, 3 - len(base))]
 
-        def transpose_near(note0: int, center: int) -> int:
-            # choose note0 + 12k nearest to center
-            candidates = [note0 + 12 * k for k in range(-6, 7)]
-            return min(candidates, key=lambda n: abs(n - center))
+        def near(n0: int, center: int) -> int:
+            cands = [n0 + 12 * k for k in range(-6, 7)]
+            return min(cands, key=lambda n: abs(n - center))
 
-        # Map degrees to zones 1..3 uniquely
-        z1_target = transpose_near(degree_set[0], self.state.zone_registers["zone1"])  # root -> low
-        z2_target = transpose_near(degree_set[1], self.state.zone_registers["zone2"])  # 3rd -> mid
-        z3_target = transpose_near(degree_set[2], self.state.zone_registers["zone3"])  # 5th/7th -> high
+        voiced: List[int] = []
+        defaults = [md.note_to_int("C3"), md.note_to_int("C4"), md.note_to_int("C5")]
+        for i, vid in enumerate(self.voice_ids[:3]):
+            center = self.cfg.registers.get(vid, defaults[i])
+            voiced.append(near(degrees[i], center))
+        return voiced
 
-        self.current_chord_notes = [z1_target, z2_target, z3_target]
-        self.current_chord_symbol = symbol
+    def on_downbeat(self, bar_idx: int, max_tension: float):
+        """Commit chord for this bar and send immediately (synchronous)."""
+        symbol = self._select_symbol(max_tension)
+        base = self.chord_to_pitches(symbol)
+        voiced = self._voice_spread(base)
+        self._current_symbol, self._current_notes = symbol, voiced
 
-        # sustain for one chord window (full bar or chord_span)
-        beats = max(1, self.state.chord_span_beats)  # or self.state.beats_per_bar if you want exactly a bar
-        spb = 60.0 / max(20.0, min(240.0, self.state.bpm))
-        dur_sec = float(spb * beats) - 0.025
+        spb = 60.0 / max(20.0, min(240.0, self.cfg.bpm))
+        dur = spb * self.cfg.beats_per_bar - 0.03
 
-        self.osc(self.state.ports["zone1"], "/note", [z1_target, 0.9, dur_sec, self.state.channels["zone1"]])
-        self.osc(self.state.ports["zone2"], "/note", [z2_target, 0.7, dur_sec, self.state.channels["zone2"]])
-        self.osc(self.state.ports["zone3"], "/note", [z3_target, 0.7, dur_sec, self.state.channels["zone3"]])
+        for vid, n in zip(self.voice_ids, voiced):
+            ch = self.cfg.channels.get(vid, self.channel())
+            self.tx.send_now(OscMessage(
+                port=self.ports.get(vid),
+                address="/note",
+                args=[n, 0.7, dur, ch]
+            ))
 
+# ---------- Melodic ----------
+
+class MelodicInstrument(Instrument):
+    """Manual note control: forward to OSC immediately (tight)."""
+    def play(self, note: int, vel: float, dur: float):
+        self.note_now(note, vel, dur)
+
+# =========================
+#       ORCHESTRATOR
+# =========================
+
+class Orchestrator:
+    """
+    High-level facade:
+    - Downbeat = commit point (harmonic decisions read latest tension/overrides)
+    - Dynamic instruments: percussive, harmonic (N voice ports), melodic
+    - Realtime middleware for OSC edits/monitoring
+    """
+    def __init__(self, cfg: GlobalConfig, ports: PortRegistry):
+        self.cfg, self.ports = cfg, ports
+        # Make sure we pass a concrete list of ports to Transport
+        self._tx = Transport(cfg.addr, list(ports.ports.values()) or [9000])
+        self._clock = TempoClock(cfg)
+        self._sched = Scheduler(self._clock, cfg)
+
+        self._tension: Dict[str, float] = {}  # zone -> [0..1]
+        self._percussion: Dict[str, PercussiveInstrument] = {}
+        self._melodic: Dict[str, MelodicInstrument] = {}
+        self._harm_groups: Dict[str, HarmonicInstrument] = {}
+
+        # Wire phases
+        self._sched.on_downbeat(self._on_downbeat_phase)
+        self._sched.on_tick(self._on_tick_phase)
+
+    # ---- Public controls ----
+    def add_middleware(self, fn: Middleware): self._tx.add_middleware(fn)
+    def set_bpm(self, bpm: float): self.cfg.bpm = float(bpm)
+    def set_tension(self, zone: str, val: float): self._tension[zone] = max(0.0, min(1.0, float(val)))
+    def max_tension(self) -> float: return max(self._tension.values(), default=0.0)
+
+    # ---- Builders ----
+    def add_percussion(self, instrument_id: str) -> PercussiveInstrument:
+        inst = PercussiveInstrument(instrument_id, self.cfg, self.ports, self._tx)
+        self._percussion[instrument_id] = inst
+        return inst
+
+    def add_harmonic_group(self, group_id: str, voice_ids: List[str], key_root: Optional[str] = None) -> HarmonicInstrument:
+        inst = HarmonicInstrument(group_id, self.cfg, self.ports, self._tx, voice_ids, key_root or self.cfg.key_root)
+        self._harm_groups[group_id] = inst
+        return inst
+
+    def add_melodic(self, instrument_id: str) -> MelodicInstrument:
+        inst = MelodicInstrument(instrument_id, self.cfg, self.ports, self._tx)
+        self._melodic[instrument_id] = inst
+        return inst
+
+    def queue_next_chord(self, group_id: str, symbol: str):
+        self._harm_groups[group_id].queue_next_chord(symbol)
+
+    # ---- Scheduler phases ----
+    def _on_downbeat_phase(self, bar_idx: int):
+        # 1) Harmonic commit (tight, synchronous send)
+        max_t = self.max_tension()
+        for inst in self._harm_groups.values():
+            inst.on_downbeat(bar_idx, max_t)
+        # 2) Percussion may choose to do bar-start work (currently on_tick drives steps)
+        for inst in self._percussion.values():
+            inst.on_downbeat(bar_idx)
+
+    def _on_tick_phase(self, beat: int, sub: int):
+        # Percussion steps per subdivision (tight send_now inside)
+        for inst in self._percussion.values():
+            inst.on_tick(beat, sub)
+
+    # ---- Lifecycle ----
     async def run(self):
-        step16 = 0
-        chord_span = max(1, self.state.chord_span_beats)
-        # seed chord
-        self.choose_and_voice_chord()
+        await self._sched.run()
 
-        async for beat, sub in self.clock.ticker(sub_per_beat=4):
-            if not self.state.running: break
-            # drums at 4th
-            if step16 % 4 == 0:
-                self.drums.step(step16 // 4)
-            step16 = (step16 + 1) % 16
-            # chord change
-            if (beat % chord_span == 0) and (sub == 0):
-                self.choose_and_voice_chord()
-            # melodic zones on 8ths
-            for v in self.voices.values():
-                v.melodic_step(sub, self.current_chord_notes, self.scale_notes)
-
-# ---- CLI demo / live controls ----
-
-async def main():
-    st = State()
-    cond = Conductor(st)
-
-    async def stdin_commands():
-        loop = asyncio.get_running_loop()
-        while st.running:
-            try:
-                cmd = await loop.run_in_executor(None, input, "")
-            except (EOFError, KeyboardInterrupt):
-                st.running = False
-                break
-            parts = cmd.strip().split()
-            if not parts: continue
-            if parts[0] == "fill":
-                cond.drums.queue_fill()
-                print("[drums] queued fill")
-            elif parts[0] == "bpm" and len(parts) > 1:
-                st.bpm = float(parts[1]); print(f"[bpm] -> {st.bpm}")
-            elif parts[0] == "t" and len(parts) == 3:
-                zone, val = parts[1], float(parts[2])
-                if zone in st.zone_tension:
-                    st.zone_tension[zone] = max(0.0, min(1.0, val))
-                    print(f"[tension] {zone} -> {st.zone_tension[zone]:.2f}")
-            elif parts[0] in ("quit","exit"):
-                st.running = False
-            else:
-                print("commands: fill | bpm 128 | t zone1 0.7 | t zone2 0.3 | t zone3 0.9 | exit")
-
-    print(f"Connecting to MOSC on ports: {st.ports}")
-    await asyncio.gather(cond.run(), stdin_commands())
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
+    def stop(self):
+        self._clock.stop()

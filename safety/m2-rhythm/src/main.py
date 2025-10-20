@@ -32,7 +32,7 @@ from pythonosc.udp_client import SimpleUDPClient
 # ---------------------- Rhythm Definitions ----------------------
 PATTERNS_BEATS: Dict[str, List[float]] = {
     "1": [1.0] * 4,                         # Straight 8ths (8 pulses per bar)
-    "2": [1.5, 1.5, 1.0],                   # Tresillo (3-3-2) in beats
+    "2": [0.75, 0.75, 0.5],  # [1.5, 1.5, 1.0],                   # Tresillo (3-3-2) in beats
     # A 3-2 son clave mapped on 16th grid over 4 beats (hits at: 1, 1e&, 3, 4&, 4):
     # IOIs in beats between hits: [1.0, 0.5, 1.5, 0.5, 0.5] -> sums to 4.0
     "3": [1.0, 0.5, 1.5, 0.5, 0.5],

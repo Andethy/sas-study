@@ -184,7 +184,7 @@ def note_to_int(note):
         return -1
 
     tone, octave = note[0:-1], note[-1]
-    if tone not in TONICS_STR or not octave.isnumeric() or int(octave) < 0 or int(octave) > 1:
+    if tone not in TONICS_STR or not octave.isnumeric() or int(octave) < 0 or int(octave) > 10:
         raise ValueError(f"Invalid tone {tone} or octave {octave}")
 
     return TONICS_STR[tone] + 12 * int(octave)
