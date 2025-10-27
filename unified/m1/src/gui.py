@@ -39,11 +39,13 @@ class AsyncEngine:
             "harm.voice2": 9002,
             "harm.voice3": 9003,
             "lead": 9004,
+            "drone_a": 8000,
+            "drone_b": 8001,
         })
 
-        self.loop: asyncio.AbstractEventLoop | None = None
-        self.thread: threading.Thread | None = None
-        self.orch: Orchestrator | None = None
+        self.loop: asyncio.AbstractEventLoop = None
+        self.thread: threading.Thread = None
+        self.orch: Orchestrator = None
         self._run_future = None
 
     # ---- lifecycle ----

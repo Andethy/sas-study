@@ -345,7 +345,19 @@ class HarmonicInstrument(Instrument):
     def on_downbeat(self, bar_idx: int, max_tension: float):
         """Commit chord for this bar and send immediately (synchronous)."""
         symbol = self._select_symbol(max_tension)
+
+        # base pitches from the chord symbol (untransposed)
         base = self.chord_to_pitches(symbol)
+
+        # --- transpose base by global key offset (C -> key_root) ---
+        try:
+            key_off = md.note_to_int(self.cfg.key_root + "0") - md.note_to_int("C0")
+        except Exception:
+            key_off = 0
+
+        print(key_off)
+        base = [n + key_off for n in base]
+
         voiced = self._voice_spread(base)
         self._current_symbol, self._current_notes = symbol, voiced
 
@@ -428,6 +440,19 @@ class Orchestrator:
         # 2) Percussion may choose to do bar-start work (currently on_tick drives steps)
         for inst in self._percussion.values():
             inst.on_downbeat(bar_idx)
+
+        try:
+            root_note = md.note_to_int(f"{self.cfg.key_root}5")
+        except Exception:
+            root_note = md.note_to_int("C5")
+
+
+        spb = 60.0 / max(20.0, min(240.0, self.cfg.bpm))
+        dur = spb * self.cfg.beats_per_bar - 0.03
+
+        for _port in (8000, 8001):
+            self._tx.send_now(OscMessage(_port, "/note", [int(root_note), 0.6, float(dur), 1]))
+
 
     def _on_tick_phase(self, beat: int, sub: int):
         # Percussion steps per subdivision (tight send_now inside)
