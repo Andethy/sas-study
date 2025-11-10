@@ -342,7 +342,7 @@ class HarmonicInstrument(Instrument):
             voiced.append(near(degrees[i], center))
         return voiced
 
-    def on_downbeat(self, bar_idx: int, max_tension: float):
+    def on_downbeat(self, bar_idx: int, max_tension: float, zone_tensions: Optional[Dict[str, float]] = None):
         """Commit chord for this bar and send immediately (synchronous)."""
         symbol = self._select_symbol(max_tension)
 
@@ -364,12 +364,35 @@ class HarmonicInstrument(Instrument):
         spb = 60.0 / max(20.0, min(240.0, self.cfg.bpm))
         dur = spb * self.cfg.beats_per_bar - 0.03
 
+        # Map voice IDs to zone tensions for velocity calculation
+        voice_zone_map = {
+            "harm.voice1": "zone1",
+            "harm.voice2": "zone2", 
+            "harm.voice3": "zone3"
+        }
+
         for vid, n in zip(self.voice_ids, voiced):
             ch = self.cfg.channels.get(vid, self.channel())
+            
+            # Calculate velocity based on zone tension
+            base_velocity = 0.3  # Minimum velocity
+            max_velocity = 0.9   # Maximum velocity
+            
+            if zone_tensions and vid in voice_zone_map:
+                zone = voice_zone_map[vid]
+                tension = zone_tensions.get(zone, 0.0)
+                # Scale tension (0-1) to velocity range (base_velocity to max_velocity)
+                velocity = base_velocity + (max_velocity - base_velocity) * tension
+                print(f"Voice {vid} -> {zone}: tension={tension:.3f}, velocity={velocity:.3f}")
+            else:
+                # Fallback to default velocity if no zone mapping
+                velocity = 0.7
+                print(f"Voice {vid}: using default velocity={velocity:.3f}")
+            
             self.tx.send_now(OscMessage(
                 port=self.ports.get(vid),
                 address="/note",
-                args=[n, 0.7, dur, ch]
+                args=[n, velocity, dur, ch]
             ))
 
 # ---------- Melodic ----------
@@ -436,7 +459,7 @@ class Orchestrator:
         # 1) Harmonic commit (tight, synchronous send)
         max_t = self.max_tension()
         for inst in self._harm_groups.values():
-            inst.on_downbeat(bar_idx, max_t)
+            inst.on_downbeat(bar_idx, max_t, self._tension)
         # 2) Percussion may choose to do bar-start work (currently on_tick drives steps)
         for inst in self._percussion.values():
             inst.on_downbeat(bar_idx)

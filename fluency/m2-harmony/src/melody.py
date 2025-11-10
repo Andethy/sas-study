@@ -135,39 +135,89 @@ class HarmonyGenerator:
         self.chord_tensions = md.CHORD_TENSIONS
         self.chord_families = md.CHORD_FAMILIES
 
-    def select_chord_by_tension(self, current_tension, previous_chord, lambda_balance=1.0, k=4):
-        possible_chords = self._generate_possible_chords()
-        weights = []
+    def select_chord_by_tension(
+            self,
+            current_tension,
+            previous_chord,
+            lambda_balance=0.3,
+            k=3,
+            max_tension_error=0.5,
+            temperature=0.1,
+    ):
+        """
+        - max_tension_error: hard tolerance for how far from target tension a chord may be
+        - temperature: how random the final choice is (0 ≈ deterministic)
+        """
+        possible_chords = self._generate_possible_chords()  # [(chord, tension), ...]
+        scored = []
 
+        # 1) first pass: compute separate errors
         for chord, chord_tension in possible_chords:
+            # hard constraints first
+            if chord == previous_chord or chord == "C_M":
+                continue
+
             tension_error = abs(chord_tension - current_tension)
 
+            # **Hard** tension window – don't even consider outliers
+            if tension_error > max_tension_error:
+                continue
+
             if previous_chord is not None:
-                delta_target = current_tension - self.get_chord_tension(previous_chord)
+                target_delta = current_tension - self.get_chord_tension(previous_chord)
                 measured_delta = self._calculate_transition_delta(previous_chord, chord)
-                delta_error = abs(measured_delta - delta_target)
+                delta_error = abs(measured_delta - target_delta)
             else:
                 delta_error = 0.0
 
+            # composite error: tension dominates, delta is a secondary term
             composite_error = tension_error + lambda_balance * delta_error
-            weight = 1 / ((composite_error + 1e-15) ** 3)
-            weights.append(weight)
+            scored.append((chord, chord_tension, tension_error, delta_error, composite_error))
 
-        largest = np.argpartition(weights, -k)[-4:]
+        # If we filtered too hard and got nothing, relax and fall back
+        if not scored:
+            # relax: ignore the hard tension window but still rank
+            for chord, chord_tension in possible_chords:
+                if chord == previous_chord or chord == "C_M":
+                    continue
 
-        pc = []
-        w = []
-        for i in largest:
-            if possible_chords[i][0] in (previous_chord, 'C_M'):
-                continue
-            pc.append(possible_chords[i])
-            w.append(weights[i])
+                tension_error = abs(chord_tension - current_tension)
+                if previous_chord is not None:
+                    target_delta = current_tension - self.get_chord_tension(previous_chord)
+                    measured_delta = self._calculate_transition_delta(previous_chord, chord)
+                    delta_error = abs(measured_delta - target_delta)
+                else:
+                    delta_error = 0.0
 
+                composite_error = tension_error + lambda_balance * delta_error
+                scored.append((chord, chord_tension, tension_error, delta_error, composite_error))
+
+        # 2) sort by composite error – this is your main "rule"
+        scored.sort(key=lambda x: x[4])  # composite_error
+
+        # 3) keep only the best k candidates
+        top = scored[:k]
+
+        # 4) almost deterministic choice:
+        #    convert errors to "scores" and sample with low temperature
+        errors = np.array([c[4] for c in top], dtype=float)
+        # shift so min error ~ 0
+        errors = errors - errors.min()
+        # turn into energies and then probabilities
+        # smaller error -> larger score
+        scores = np.exp(-errors / max(temperature, 1e-6))
+        probs = scores / scores.sum()
+
+        chosen = r.choices(top, weights=probs, k=1)[0][0]
+
+        # Debug logging
         print("@", current_tension, previous_chord, lambda_balance)
-        print("@@", pc, w)
+        print("@@ candidates:")
+        for chord, ct, te, de, ce in top:
+            print(f"  {chord}: tension_err={te:.3f}, delta_err={de:.3f}, composite={ce:.3f}")
+        print("=> chosen:", chosen)
 
-
-        return r.choices(pc, weights=w, k=1)[0][0] if current_tension > 0 else 'C_M'
+        return chosen
 
     def generate_chord_progression(self, target_tensions, delta_target=0.0, rest=0.5, lambda_balance=1.0, k=4):
         """
