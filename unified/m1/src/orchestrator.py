@@ -375,8 +375,8 @@ class HarmonicInstrument(Instrument):
             ch = self.cfg.channels.get(vid, self.channel())
             
             # Calculate velocity based on zone tension
-            base_velocity = 0.3  # Minimum velocity
-            max_velocity = 0.9   # Maximum velocity
+            base_velocity = 0.5  # Minimum velocity (increased from 0.3)
+            max_velocity = 1.0   # Maximum velocity (increased from 0.9)
             
             if zone_tensions and vid in voice_zone_map:
                 zone = voice_zone_map[vid]

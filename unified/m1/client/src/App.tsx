@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import TensionCanvas from './components/TensionCanvas';
 import Controls from './components/Controls';
 import StatusLog from './components/StatusLog';
+import TimbreInterpolation from './components/TimbreInterpolation';
+import TensionAutomation from './components/TensionAutomation';
 import { useWebSocket } from './hooks/useWebSocket';
 import { apiService } from './services/apiService';
 
@@ -46,6 +48,9 @@ function App() {
 
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [isConnected, setIsConnected] = useState(false);
+  const [activeTab, setActiveTab] = useState<'controls' | 'timbre' | 'automation'>('controls');
+  const [lastMaxTension, setLastMaxTension] = useState<number>(0);
+  const [isAutomationMode, setIsAutomationMode] = useState<boolean>(false);
 
   // WebSocket connection
   const { lastMessage, connectionStatus } = useWebSocket(WS_URL);
@@ -130,35 +135,70 @@ function App() {
     }
   }, [lastMessage]);
 
+  // Control handlers (define these first)
+  const handleFillTrigger = useCallback(async (preset: string, beats: number) => {
+    try {
+      await apiService.triggerFill(preset, beats);
+      addLog(`Fill triggered: ${preset} (${beats} beats)`, 'success');
+    } catch (error) {
+      addLog(`Error triggering fill: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+    }
+  }, [addLog]);
+
   // Tension update handler with throttling
   const tensionUpdateTimeoutRef = useRef<number | null>(null);
   
   const handleTensionUpdate = useCallback((newTensions: Tensions) => {
-    // console.log('Tension update received:', newTensions);
-    // setTensions(newTensions);
+    console.log('Tension update received:', newTensions);
+    
+    // Check if tensions actually changed to prevent unnecessary updates
+    const currentTensions = tensions;
+    const hasChanged = Object.keys(newTensions).some(key => 
+      Math.abs(newTensions[key as keyof Tensions] - (currentTensions[key as keyof Tensions] || 0)) > 0.001
+    );
+    
+    if (!hasChanged) {
+      console.log('Tensions unchanged, skipping update');
+      return;
+    }
+    
+    setTensions(newTensions);
+    
+    // Check for automatic fill trigger
+    const maxTension = Math.max(newTensions.zone1, newTensions.zone2, newTensions.zone3);
+    if (maxTension > 0.85 && lastMaxTension <= 0.85) {
+      console.log('Max tension exceeded 0.85, triggering automatic fill');
+      // Call the fill trigger directly to avoid circular dependency
+      apiService.triggerFill('snare', 2).then(() => {
+        addLog('Automatic fill triggered (high tension)', 'info');
+      }).catch((error) => {
+        addLog(`Error triggering automatic fill: ${error.message}`, 'error');
+      });
+    }
+    setLastMaxTension(maxTension);
     
     // Throttle API calls to avoid overwhelming the server
     if (tensionUpdateTimeoutRef.current) {
-      // console.log('Clearing previous timeout:', tensionUpdateTimeoutRef.current);
+      console.log('Clearing previous timeout:', tensionUpdateTimeoutRef.current);
       clearTimeout(tensionUpdateTimeoutRef.current);
     }
     
     const timeoutId = window.setTimeout(async () => {
-      console.log('Timeout callback executing for tensions:', newTensions);
+      console.log('🚀 Timeout callback executing for tensions:', newTensions);
       try {
-        console.log('Sending tension update to API:', newTensions);
+        console.log('📤 Sending tension update to API:', newTensions);
         const result = await apiService.updateTension(newTensions);
-        console.log('API response:', result);
+        console.log('✅ API response:', result);
         addLog(`Tensions updated: ${Object.entries(newTensions).map(([k,v]) => `${k}=${v.toFixed(2)}`).join(', ')}`, 'success');
       } catch (error) {
-        console.error('Tension update error:', error);
+        console.error('❌ Tension update error:', error);
         addLog(`Error updating tension: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
       }
-    }, 100);
+    }, 500); // Increased from 100ms to 500ms to allow API calls to complete
     
     tensionUpdateTimeoutRef.current = timeoutId;
-    // console.log('Set new timeout:', timeoutId);
-  }, [addLog]);
+    console.log('Set new timeout:', timeoutId);
+  }, [addLog, lastMaxTension]);
 
   // Control handlers
   const handleBPMUpdate = async (bpm: number) => {
@@ -197,14 +237,25 @@ function App() {
     }
   };
 
-  const handleFillTrigger = async (preset: string, beats: number) => {
-    try {
-      await apiService.triggerFill(preset, beats);
-      addLog(`Fill triggered: ${preset} (${beats} beats)`, 'success');
-    } catch (error) {
-      addLog(`Error triggering fill: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
-    }
-  };
+
+
+  // Keyboard event listener for spacebar drum fill
+  useEffect(() => {
+    const handleKeyPress = (event: KeyboardEvent) => {
+      // Only trigger if spacebar is pressed and not in an input field
+      if (event.code === 'Space' && 
+          event.target instanceof HTMLElement && 
+          !['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target.tagName)) {
+        event.preventDefault();
+        console.log('Spacebar pressed - triggering drum fill');
+        handleFillTrigger('snare', 3); // Default: snare fill, 3 beats
+        addLog('Drum fill triggered via spacebar', 'info');
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyPress);
+    return () => window.removeEventListener('keydown', handleKeyPress);
+  }, [handleFillTrigger, addLog]);
 
   return (
     <div className="container">
@@ -225,6 +276,7 @@ function App() {
           <TensionCanvas
             tensions={tensions}
             onTensionUpdate={handleTensionUpdate}
+            isAutomationMode={isAutomationMode}
           />
           
           <div className="tension-display">
@@ -240,33 +292,97 @@ function App() {
               <span className="zone-label zone3-color">Zone 3:</span>
               <span>{tensions.zone3.toFixed(2)}</span>
             </div>
+            {isAutomationMode && (
+              <div className="automation-indicator">
+                <span style={{ color: '#ff9800', fontWeight: 'bold' }}>🤖 AUTOMATION ACTIVE</span>
+              </div>
+            )}
           </div>
         </div>
 
         <div className="controls-section">
-          {/* Debug button to test tension updates */}
-          <div className="control-group">
-            <h3>Debug</h3>
-            <button 
-              onClick={() => {
-                console.log('Manual tension test button clicked');
-                handleTensionUpdate({ zone1: 0.1, zone2: 0.5, zone3: 0.9 });
-              }}
-              className="action-btn"
-            >
-              Test Tension Update
-            </button>
+          {/* Tabs */}
+          <div className="tabs-container">
+            <div className="tabs-header">
+              <button 
+                className={`tab-button ${activeTab === 'controls' ? 'active' : ''}`}
+                onClick={() => setActiveTab('controls')}
+              >
+                Controls
+              </button>
+              <button 
+                className={`tab-button ${activeTab === 'timbre' ? 'active' : ''}`}
+                onClick={() => setActiveTab('timbre')}
+              >
+                Timbre
+              </button>
+              <button 
+                className={`tab-button ${activeTab === 'automation' ? 'active' : ''}`}
+                onClick={() => setActiveTab('automation')}
+              >
+                Automation
+              </button>
+            </div>
+            
+            <div className="tab-content">
+              {activeTab === 'controls' && (
+                <>
+                  {/* Debug button to test tension updates */}
+                  <div className="control-group">
+                    <h3>Debug</h3>
+                    <button 
+                      onClick={() => {
+                        console.log('Manual tension test button clicked');
+                        handleTensionUpdate({ zone1: 0.1, zone2: 0.5, zone3: 0.9 });
+                      }}
+                      className="action-btn"
+                    >
+                      Test Tension Update
+                    </button>
+                    <button 
+                      onClick={async () => {
+                        console.log('Direct API test button clicked');
+                        try {
+                          const result = await apiService.updateTension({ zone1: 0.3, zone2: 0.6, zone3: 0.8 });
+                          console.log('✅ Direct API test successful:', result);
+                          addLog('Direct API test successful', 'success');
+                        } catch (error) {
+                          console.error('❌ Direct API test failed:', error);
+                          addLog(`Direct API test failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+                        }
+                      }}
+                      className="action-btn"
+                      style={{ marginTop: '10px' }}
+                    >
+                      Test Direct API
+                    </button>
+                  </div>
+                  
+                  <Controls
+                    orchestratorState={orchestratorState}
+                    onBPMUpdate={handleBPMUpdate}
+                    onKeyUpdate={handleKeyUpdate}
+                    onBeatsPerBarUpdate={handleBeatsPerBarUpdate}
+                    onChordQueue={handleChordQueue}
+                    onFillTrigger={handleFillTrigger}
+                    isConnected={isConnected}
+                  />
+                </>
+              )}
+              
+              {activeTab === 'timbre' && (
+                <TimbreInterpolation isConnected={isConnected} />
+              )}
+              
+              {activeTab === 'automation' && (
+                <TensionAutomation 
+                  isConnected={isConnected} 
+                  onTensionUpdate={handleTensionUpdate}
+                  onAutomationModeChange={setIsAutomationMode}
+                />
+              )}
+            </div>
           </div>
-          
-          <Controls
-            orchestratorState={orchestratorState}
-            onBPMUpdate={handleBPMUpdate}
-            onKeyUpdate={handleKeyUpdate}
-            onBeatsPerBarUpdate={handleBeatsPerBarUpdate}
-            onChordQueue={handleChordQueue}
-            onFillTrigger={handleFillTrigger}
-            isConnected={isConnected}
-          />
           
           <StatusLog logs={logs} />
         </div>

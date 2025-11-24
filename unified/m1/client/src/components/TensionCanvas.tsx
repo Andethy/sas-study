@@ -18,13 +18,22 @@ interface ZoneAnchor extends Point {
 interface TensionCanvasProps {
   tensions: Tensions;
   onTensionUpdate: (tensions: Tensions) => void;
+  isAutomationMode?: boolean;
 }
 
-const TensionCanvas: React.FC<TensionCanvasProps> = ({ tensions, onTensionUpdate }) => {
+const TensionCanvas: React.FC<TensionCanvasProps> = ({ tensions, onTensionUpdate, isAutomationMode = false }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [canvasSize, setCanvasSize] = useState<{ width: number; height: number }>({ width: 600, height: 600 });
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [canvasPoint, setCanvasPoint] = useState<Point>({ x: 300, y: 300 });
+
+  // Update canvas point when canvas size changes to keep it centered
+  useEffect(() => {
+    const centerX = canvasSize.width / 2;
+    const centerY = canvasSize.height / 2;
+    console.log('Canvas size changed:', canvasSize, 'Setting point to:', { x: centerX, y: centerY });
+    setCanvasPoint({ x: centerX, y: centerY });
+  }, [canvasSize]);
 
   // Zone anchor positions (fixed)
   const zoneAnchors: Record<keyof Tensions, ZoneAnchor> = {
@@ -40,7 +49,7 @@ const TensionCanvas: React.FC<TensionCanvasProps> = ({ tensions, onTensionUpdate
 
   // Calculate tension values based on canvas point position
   const calculateTensions = useCallback((point: Point): Tensions => {
-    const maxDistance = canvasSize.width * 0.4; // Reduced from 0.7 to 0.4 for tighter control
+    const maxDistance = canvasSize.width * 0.5; // Set to 0.5 for balanced overlap
     const newTensions: Tensions = { zone1: 0, zone2: 0, zone3: 0 };
     
     (Object.keys(zoneAnchors) as Array<keyof Tensions>).forEach(zone => {
@@ -73,12 +82,17 @@ const TensionCanvas: React.FC<TensionCanvasProps> = ({ tensions, onTensionUpdate
     return newTensions;
   }, [canvasSize, zoneAnchors]);
 
-  // Update tensions when canvas point moves
+  // Update tensions when canvas point moves (only if not in automation mode)
   useEffect(() => {
+    if (isAutomationMode) {
+      console.log('Skipping canvas tension update - automation mode active');
+      return;
+    }
+    
     const newTensions = calculateTensions(canvasPoint);
     console.log('Canvas point moved to:', canvasPoint, 'New tensions:', newTensions);
     onTensionUpdate(newTensions);
-  }, [canvasPoint, calculateTensions, onTensionUpdate]);
+  }, [canvasPoint, calculateTensions, isAutomationMode]);
 
   // Draw canvas
   const draw = useCallback(() => {
@@ -90,11 +104,17 @@ const TensionCanvas: React.FC<TensionCanvasProps> = ({ tensions, onTensionUpdate
 
     ctx.clearRect(0, 0, canvasSize.width, canvasSize.height);
 
-    // Draw zone influence circles (faint)
-    const maxDistance = canvasSize.width * 0.4;
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+    // Draw zone influence circles (colored by zone)
+    const maxDistance = canvasSize.width * 0.5;
     ctx.lineWidth = 1;
-    Object.values(zoneAnchors).forEach(anchor => {
+    Object.entries(zoneAnchors).forEach(([zone, anchor]) => {
+      // Convert hex color to rgba with low opacity
+      const hexColor = anchor.color;
+      const r = parseInt(hexColor.slice(1, 3), 16);
+      const g = parseInt(hexColor.slice(3, 5), 16);
+      const b = parseInt(hexColor.slice(5, 7), 16);
+      ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.2)`;
+      
       ctx.beginPath();
       ctx.arc(anchor.x, anchor.y, maxDistance, 0, 2 * Math.PI);
       ctx.stroke();
@@ -144,7 +164,8 @@ const TensionCanvas: React.FC<TensionCanvasProps> = ({ tensions, onTensionUpdate
       const container = canvasRef.current?.parentElement;
       if (container) {
         const rect = container.getBoundingClientRect();
-        const size = Math.min(rect.width, 600);
+        const size = Math.min(rect.width - 40, 600); // Account for padding
+        console.log('Container rect:', rect, 'Setting canvas size to:', size);
         setCanvasSize({ width: size, height: size });
       }
     };

@@ -174,6 +174,9 @@ const Controls: React.FC<ControlsProps> = ({
           <button type="submit" className="action-btn" disabled={!isConnected}>
             Trigger Fill
           </button>
+          <div style={{ fontSize: '12px', color: '#aaa', marginTop: '8px', textAlign: 'center' }}>
+            Press <kbd style={{ background: '#333', padding: '2px 6px', borderRadius: '3px', fontSize: '11px' }}>Space</kbd> for quick snare fill
+          </div>
         </form>
       </div>  
     {/* Chord Override */}
