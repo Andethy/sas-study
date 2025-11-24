@@ -48,8 +48,9 @@ class App:
 
     def __init__(self):
         self.dir = os.path.dirname(os.path.abspath(__file__))
-        self.data = pd.read_csv('resources/results/average_ratings_normalized.csv')
-        with open('resources/results/TimbreResults.json') as f:
+        print("FLAG:", os.path.abspath('../resources/results/average_ratings_normalized.csv'))
+        self.data = pd.read_csv('../resources/results/average_ratings_normalized.csv')
+        with open('../resources/results/TimbreResults.json') as f:
             self.timbre_data = json.load(f)
 
         self.safety_ratings = []
@@ -157,7 +158,7 @@ class App:
 
     def init_model(self):
         self.model = VAEInterp(self.configs)
-        checkpoint_path = "resources/checkpoint/epoch=311-step=705120.ckpt"
+        checkpoint_path = "../resources/checkpoint/epoch=311-step=705120.ckpt"
         checkpoint = torch.load(checkpoint_path, weights_only=True, map_location=torch.device('cpu'))
         self.model.load_state_dict(checkpoint['state_dict'], strict=False)
         self.model.eval()
@@ -198,8 +199,8 @@ class App:
         a_match = self.find_closest_match(self.a_safety.get(), self.a_urgency.get())
         b_match = self.find_closest_match(self.b_safety.get(), self.b_urgency.get())
 
-        self.a_audio_path.set('resources/samples/' + a_match['filepath'])
-        self.b_audio_path.set('resources/samples/' + b_match['filepath'])
+        self.a_audio_path.set('../resources/samples/' + a_match['filepath'])
+        self.b_audio_path.set('../resources/samples/' + b_match['filepath'])
 
         self.result_label.config(text=f"A: {self.a_audio_path.get()}\nB: {self.b_audio_path.get()}")
 
@@ -228,13 +229,13 @@ class App:
 
         if side == "A":
             file_path = filedialog.askopenfilename(title="Select a File",
-                                               initialdir='resources/samples',
+                                               initialdir='../resources/samples',
                                                filetypes=[("Wav files", "*.wav"), ("All files", "*.*")])
             self.a_audio_path.set(file_path)
         
         elif side == "B":
             file_path = filedialog.askopenfilename(title="Select a File",
-                                               initialdir='resources/samples',
+                                               initialdir='../resources/samples',
                                                filetypes=[("Wav files", "*.wav"), ("All files", "*.*")])
             self.b_audio_path.set(file_path)
         
@@ -256,7 +257,7 @@ class App:
         timbre2_audio = self.load_audio(timbre_b_path)
         
         print(f"Generating interpolation points: 0.0")
-        save_path0 = "resources/interp_results/interp-0.0.wav"
+        save_path0 = "../resources/interp_results/interp-0.0.wav"
         torchaudio.save(save_path0, timbre2_audio, sample_rate = self.system_sr)
 
         for i in range(1, 10):
@@ -264,17 +265,17 @@ class App:
             print(f"Generating interpolation points: {p:.1f}")
             audio_interp = self.model(timbre1_audio, timbre2_audio, p).detach()
             audio_interp *= 4
-            save_path = f"resources/interp_results/interp-{p:.1f}.wav"
+            save_path = f"../resources/interp_results/interp-{p:.1f}.wav"
             torchaudio.save(save_path, audio_interp, sample_rate = self.system_sr)
         
         print(f"Generating interpolation points: 1.0")
-        save_path1 = "resources/interp_results/interp-1.0.wav"
+        save_path1 = "../resources/interp_results/interp-1.0.wav"
         torchaudio.save(save_path1, timbre1_audio, sample_rate = self.system_sr)
     
     def play_interp(self, p):
         p = round(1-p, 1)
         print(p)
-        interp_audio_path = f"resources/interp_results/interp-{p:.1f}.wav"
+        interp_audio_path = f"../resources/interp_results/interp-{p:.1f}.wav"
         self.play_audio(interp_audio_path)
     
 
