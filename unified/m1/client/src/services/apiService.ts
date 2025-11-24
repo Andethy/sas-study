@@ -99,6 +99,41 @@ class ApiService {
       body: JSON.stringify({ preset, beats }),
     });
   }
+
+  // Timbre Interpolation Methods
+  async uploadTimbreSample(file: File, sampleType: 'sample_a' | 'sample_b'): Promise<{ filename: string; file_id: string; status: string }> {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await fetch(`${API_BASE}/timbre/upload/${sampleType}`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.detail || `HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    return await response.json();
+  }
+
+  async setTimbreMix(mixValue: number): Promise<{ status: string; mix_value: number; output_file?: string; audio_url?: string }> {
+    return this.request('/timbre/mix', {
+      method: 'POST',
+      body: JSON.stringify({ mix_value: mixValue }),
+    });
+  }
+
+  async getTimbreStatus(): Promise<{ sample_a: string | null; sample_b: string | null; current_mix: number; ready: boolean }> {
+    return this.request('/timbre/status');
+  }
+
+  async deleteTimbreSample(sampleType: 'sample_a' | 'sample_b'): Promise<{ status: string; sample_type: string }> {
+    return this.request(`/timbre/${sampleType}`, {
+      method: 'DELETE',
+    });
+  }
 }
 
 export const apiService = new ApiService();

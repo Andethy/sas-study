@@ -4,10 +4,15 @@ import logging
 from typing import Dict, List, Set
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, validator
 import uvicorn
+import os
+import shutil
+import subprocess
+import tempfile
 
 from orchestrator import GlobalConfig, PortRegistry, Orchestrator, md
 
@@ -63,6 +68,14 @@ class OrchestratorState(BaseModel):
     key_root: str
     tensions: Dict[str, float]
     current_bar: int = 0
+
+class TimbreMixRequest(BaseModel):
+    mix_value: float = Field(ge=0.0, le=1.0)
+
+class TimbreUploadResponse(BaseModel):
+    filename: str
+    file_id: str
+    status: str
 
 # ---- WebSocket Manager ----
 
@@ -128,6 +141,12 @@ class OrchestratorService:
         self.current_bar = 0
         self._lock = asyncio.Lock()
         self._running = False
+        
+        # Timbre interpolation state
+        self.timbre_files = {"sample_a": None, "sample_b": None}
+        self.current_mix = 0.5
+        self.upload_dir = "uploads"
+        os.makedirs(self.upload_dir, exist_ok=True)
     
     async def start(self):
         if self._running:
@@ -249,6 +268,142 @@ class OrchestratorService:
             },
             current_bar=self.current_bar
         )
+    
+    async def upload_timbre_file(self, file: UploadFile, sample_type: str) -> TimbreUploadResponse:
+        """Upload and store a timbre sample file"""
+        if sample_type not in ["sample_a", "sample_b"]:
+            raise ValueError("sample_type must be 'sample_a' or 'sample_b'")
+        
+        # Generate unique filename
+        file_extension = os.path.splitext(file.filename)[1] if file.filename else ".wav"
+        file_id = f"{sample_type}_{int(asyncio.get_event_loop().time())}{file_extension}"
+        file_path = os.path.join(self.upload_dir, file_id)
+        
+        # Save uploaded file
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        # Store file info
+        self.timbre_files[sample_type] = {
+            "filename": file.filename,
+            "file_id": file_id,
+            "file_path": file_path
+        }
+        
+        logger.info(f"Uploaded {sample_type}: {file.filename} -> {file_path}")
+        
+        return TimbreUploadResponse(
+            filename=file.filename or "unknown",
+            file_id=file_id,
+            status="uploaded"
+        )
+    
+    async def set_timbre_mix(self, mix_value: float):
+        """Set the timbre interpolation mix value and call m1-timbre"""
+        self.current_mix = max(0.0, min(1.0, mix_value))
+        
+        # Check if both files are uploaded
+        if not (self.timbre_files["sample_a"] and self.timbre_files["sample_b"]):
+            raise ValueError("Both sample A and sample B must be uploaded before mixing")
+        
+        # Call m1-timbre app to perform interpolation
+        try:
+            sample_a_path = self.timbre_files["sample_a"]["file_path"]
+            sample_b_path = self.timbre_files["sample_b"]["file_path"]
+            
+            # Create output path
+            output_path = os.path.join(self.upload_dir, f"mixed_{int(asyncio.get_event_loop().time())}.wav")
+            
+            # Call m1-timbre subprocess from the correct working directory
+            # Calculate path to m1-timbre directory
+            # Get the current file's directory, go up to repo root, then to safety/m1-timbre/src
+            current_dir = os.path.dirname(os.path.abspath(__file__))  # unified/m1/src
+            repo_root = os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))  # go up 3 levels to repo root
+            m1_timbre_dir = os.path.join(repo_root, "safety", "m1-timbre", "src")
+            
+            # Alternative path calculation if the first one doesn't work
+            if not os.path.exists(m1_timbre_dir):
+                # Try relative to current working directory
+                alt_m1_timbre_dir = os.path.join(os.getcwd(), "safety", "m1-timbre", "src")
+                if os.path.exists(alt_m1_timbre_dir):
+                    m1_timbre_dir = alt_m1_timbre_dir
+                    logger.info(f"Using alternative path: {m1_timbre_dir}")
+                else:
+                    # Try going up from current working directory
+                    cwd_parent = os.path.dirname(os.getcwd())
+                    alt_m1_timbre_dir2 = os.path.join(cwd_parent, "safety", "m1-timbre", "src")
+                    if os.path.exists(alt_m1_timbre_dir2):
+                        m1_timbre_dir = alt_m1_timbre_dir2
+                        logger.info(f"Using alternative path 2: {m1_timbre_dir}")
+            
+            # Debug: log the path calculation
+            logger.info(f"Current working directory: {os.getcwd()}")
+            logger.info(f"Current file dir: {current_dir}")
+            logger.info(f"Repo root: {repo_root}")
+            logger.info(f"Looking for m1-timbre at: {m1_timbre_dir}")
+            logger.info(f"m1-timbre directory exists: {os.path.exists(m1_timbre_dir)}")
+            
+            # Also check if main.py exists in the directory
+            main_py_path = os.path.join(m1_timbre_dir, "main.py")
+            logger.info(f"main.py exists at {main_py_path}: {os.path.exists(main_py_path)}")
+            
+            cmd = [
+                "python", "-m", "main",
+                "--sample-a", os.path.abspath(sample_a_path),
+                "--sample-b", os.path.abspath(sample_b_path),
+                "--mix", str(self.current_mix),
+                "--output", os.path.abspath(output_path),
+                "--headless"
+            ]
+            
+            # Verify the directory exists
+            if not os.path.exists(m1_timbre_dir):
+                raise FileNotFoundError(f"m1-timbre directory not found: {m1_timbre_dir}")
+            
+            logger.info(f"Calling m1-timbre from {m1_timbre_dir}: {' '.join(cmd)}")
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, cwd=m1_timbre_dir)
+            
+            if result.returncode == 0:
+                logger.info(f"Timbre interpolation successful: {output_path}")
+                
+                # Broadcast update to connected clients
+                await self.manager.broadcast({
+                    "type": "timbre_mix_update",
+                    "mix_value": self.current_mix,
+                    "output_file": output_path,
+                    "status": "success"
+                })
+                
+                # Create audio URL for frontend
+                filename = os.path.basename(output_path)
+                audio_url = f"/audio/{filename}"
+                
+                return {
+                    "status": "success", 
+                    "mix_value": self.current_mix, 
+                    "output_file": output_path,
+                    "audio_url": audio_url
+                }
+            else:
+                error_msg = f"m1-timbre failed: {result.stderr}"
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+                
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("Timbre interpolation timed out")
+        except Exception as e:
+            logger.error(f"Timbre interpolation error: {e}")
+            raise RuntimeError(f"Timbre interpolation failed: {str(e)}")
+    
+    def get_timbre_status(self):
+        """Get current timbre interpolation status"""
+        return {
+            "sample_a": self.timbre_files["sample_a"]["filename"] if self.timbre_files["sample_a"] else None,
+            "sample_b": self.timbre_files["sample_b"]["filename"] if self.timbre_files["sample_b"] else None,
+            "current_mix": self.current_mix,
+            "ready": bool(self.timbre_files["sample_a"] and self.timbre_files["sample_b"])
+        }
 
 # ---- FastAPI App ----
 
@@ -335,6 +490,96 @@ async def trigger_fill(fill: DrumFill):
         return {"status": "ok", "preset": fill.preset, "beats": fill.beats}
     except Exception as e:
         logger.error(f"Error triggering fill: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ---- Timbre Interpolation Endpoints ----
+
+@app.post("/timbre/upload/{sample_type}")
+async def upload_timbre_sample(sample_type: str, file: UploadFile = File(...)):
+    """Upload a timbre sample file (sample_a or sample_b)"""
+    try:
+        if sample_type not in ["sample_a", "sample_b"]:
+            raise HTTPException(status_code=400, detail="sample_type must be 'sample_a' or 'sample_b'")
+        
+        # Validate file type
+        if not file.filename or not any(file.filename.lower().endswith(ext) for ext in ['.wav', '.mp3', '.flac', '.aiff']):
+            raise HTTPException(status_code=400, detail="File must be an audio file (.wav, .mp3, .flac, .aiff)")
+        
+        result = await service.upload_timbre_file(file, sample_type)
+        return result
+    except Exception as e:
+        logger.error(f"Error uploading timbre sample: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/timbre/mix")
+async def set_timbre_mix(mix_request: TimbreMixRequest):
+    """Set the timbre interpolation mix value"""
+    try:
+        result = await service.set_timbre_mix(mix_request.mix_value)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error setting timbre mix: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/timbre/status")
+async def get_timbre_status():
+    """Get current timbre interpolation status"""
+    try:
+        return service.get_timbre_status()
+    except Exception as e:
+        logger.error(f"Error getting timbre status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/audio/{filename}")
+async def serve_audio(filename: str):
+    """Serve audio files from the uploads directory"""
+    try:
+        file_path = os.path.join(service.upload_dir, filename)
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="Audio file not found")
+        
+        # Determine media type based on file extension
+        if filename.endswith('.wav'):
+            media_type = 'audio/wav'
+        elif filename.endswith('.mp3'):
+            media_type = 'audio/mpeg'
+        elif filename.endswith('.flac'):
+            media_type = 'audio/flac'
+        elif filename.endswith('.aiff'):
+            media_type = 'audio/aiff'
+        else:
+            media_type = 'audio/wav'  # default
+        
+        return FileResponse(
+            path=file_path,
+            media_type=media_type,
+            filename=filename
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error serving audio file {filename}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/timbre/{sample_type}")
+async def delete_timbre_sample(sample_type: str):
+    """Delete a timbre sample file"""
+    try:
+        if sample_type not in ["sample_a", "sample_b"]:
+            raise HTTPException(status_code=400, detail="sample_type must be 'sample_a' or 'sample_b'")
+        
+        if service.timbre_files[sample_type]:
+            file_path = service.timbre_files[sample_type]["file_path"]
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            service.timbre_files[sample_type] = None
+            logger.info(f"Deleted {sample_type}")
+        
+        return {"status": "deleted", "sample_type": sample_type}
+    except Exception as e:
+        logger.error(f"Error deleting timbre sample: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ---- WebSocket Endpoint ----

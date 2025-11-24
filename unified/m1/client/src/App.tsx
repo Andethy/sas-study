@@ -371,7 +371,10 @@ function App() {
               )}
               
               {activeTab === 'timbre' && (
-                <TimbreInterpolation isConnected={isConnected} />
+                <TimbreInterpolation 
+                  isConnected={isConnected} 
+                  onLog={addLog}
+                />
               )}
               
               {activeTab === 'automation' && (

@@ -46,7 +46,8 @@ def stop_drone():
 
 class App:
 
-    def __init__(self):
+    def __init__(self, headless=False):
+        self.headless = headless
         self.dir = os.path.dirname(os.path.abspath(__file__))
         print("FLAG:", os.path.abspath('../resources/results/average_ratings_normalized.csv'))
         self.data = pd.read_csv('../resources/results/average_ratings_normalized.csv')
@@ -59,12 +60,16 @@ class App:
             self.safety_ratings.extend(value['Safety'])
             self.urgency_ratings.extend(value['Urgency'])
         
-        self.init_ui()
+        if not self.headless:
+            self.init_ui()
         self.init_configs()
         self.init_model()
 
     
     def init_ui(self):
+        if self.headless:
+            return
+            
         self.app = tk.Tk()
         self.app.title("Sound Match Application")
 
@@ -164,7 +169,10 @@ class App:
         self.model.eval()
 
     def run(self):
-        self.app.mainloop()
+        if not self.headless:
+            self.app.mainloop()
+        else:
+            print("Running in headless mode - GUI disabled")
     
     def on_close(self):
         if pygame.mixer.music.get_busy():
@@ -278,6 +286,46 @@ class App:
         interp_audio_path = f"../resources/interp_results/interp-{p:.1f}.wav"
         self.play_audio(interp_audio_path)
     
+    def interpolate_direct(self, sample_a_path, sample_b_path, mix_ratio, output_path):
+        """
+        Direct interpolation method for API use (headless mode).
+        
+        Args:
+            sample_a_path: Path to first audio sample
+            sample_b_path: Path to second audio sample
+            mix_ratio: Interpolation ratio (0.0 to 1.0)
+            output_path: Path to save interpolated result
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            print(f"Direct interpolation: {sample_a_path} + {sample_b_path} -> {output_path}")
+            print(f"Mix ratio: {mix_ratio}")
+            
+            # Load audio files
+            timbre_a = self.load_audio(sample_a_path)
+            timbre_b = self.load_audio(sample_b_path)
+            
+            # Perform interpolation
+            with torch.no_grad():
+                audio_interp = self.model(timbre_a, timbre_b, mix_ratio).detach()
+                # Amplify the result (as done in original app)
+                audio_interp *= 4
+            
+            # Ensure output directory exists
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            # Save result
+            torchaudio.save(output_path, audio_interp, sample_rate=self.system_sr)
+            
+            print(f"Interpolation successful: {output_path}")
+            return True
+            
+        except Exception as e:
+            print(f"Interpolation failed: {e}")
+            return False
+    
 
 class VAEInterp(nn.Module):
     def __init__(self, configs):
@@ -340,8 +388,55 @@ def fit_to_block(timbre_audio, block_size):
 
 
 def main():
-    app = App()
-    app.run()
+    import argparse
+    import sys
+    
+    parser = argparse.ArgumentParser(description="Timbre Interpolation Tool")
+    parser.add_argument("--sample-a", help="Path to first audio sample")
+    parser.add_argument("--sample-b", help="Path to second audio sample")
+    parser.add_argument("--mix", type=float, help="Mix ratio (0.0 to 1.0)")
+    parser.add_argument("--output", help="Output file path")
+    parser.add_argument("--headless", action="store_true", help="Run without GUI")
+    
+    args = parser.parse_args()
+    
+    # If CLI arguments provided, run in headless mode
+    if args.sample_a and args.sample_b and args.mix is not None and args.output:
+        print("Running in CLI mode...")
+        
+        # Validate mix ratio
+        if not 0.0 <= args.mix <= 1.0:
+            print("Error: Mix ratio must be between 0.0 and 1.0")
+            sys.exit(1)
+        
+        try:
+            # Initialize app in headless mode
+            app = App(headless=True)
+            
+            # Perform interpolation
+            success = app.interpolate_direct(
+                args.sample_a,
+                args.sample_b,
+                args.mix,
+                args.output
+            )
+            
+            if success:
+                print("SUCCESS: Timbre interpolation completed")
+                sys.exit(0)
+            else:
+                print("ERROR: Timbre interpolation failed")
+                sys.exit(1)
+                
+        except Exception as e:
+            print(f"FATAL ERROR: {e}")
+            sys.exit(1)
+    
+    else:
+        # Run GUI mode
+        print("Running in GUI mode...")
+        app = App(headless=False)
+        app.run()
 
 if __name__ == '__main__':
     main()

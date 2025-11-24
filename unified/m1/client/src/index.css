@@ -562,4 +562,42 @@ Tension Automation */
   color: #aaa;
   text-align: center;
   margin: 0;
+}/* 
+Audio Controls */
+.audio-controls {
+  margin-bottom: 20px;
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+}
+
+.audio-control-btn {
+  padding: 8px 16px;
+  border: 1px solid #2196F3;
+  border-radius: 4px;
+  background: #1976D2;
+  color: white;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background-color 0.2s;
+}
+
+.audio-control-btn:hover:not(:disabled) {
+  background: #1565C0;
+}
+
+.audio-control-btn:disabled {
+  background: #666;
+  border-color: #666;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.audio-control-btn.stop-btn {
+  background: #f44336;
+  border-color: #f44336;
+}
+
+.audio-control-btn.stop-btn:hover {
+  background: #d32f2f;
 }

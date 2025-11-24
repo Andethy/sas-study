@@ -308,7 +308,7 @@ class HarmonicInstrument(Instrument):
                 current_tension=max_tension,
                 previous_chord=self._prev,
                 lambda_balance=1.0,
-                k=4
+                k=1
             )
         else:
             sym = f"{self.cfg.key_root}_M"
