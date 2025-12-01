@@ -600,4 +600,48 @@ Audio Controls */
 
 .audio-control-btn.stop-btn:hover {
   background: #d32f2f;
+}/* 
+Real-time Playback Controls */
+.realtime-controls {
+  margin-bottom: 20px;
+  padding: 15px;
+  border: 1px solid #444;
+  border-radius: 4px;
+  background: #2a2a2a;
+}
+
+.realtime-controls h4 {
+  margin: 0 0 10px 0;
+  color: #e0e0e0;
+  font-size: 16px;
+}
+
+.playback-controls {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.audio-control-btn.start-btn {
+  background: #4CAF50;
+  border-color: #4CAF50;
+}
+
+.audio-control-btn.start-btn:hover:not(:disabled) {
+  background: #45a049;
+}
+
+.playback-status {
+  display: flex;
+  align-items: center;
+}
+
+.status-playing {
+  color: #4CAF50;
+  font-weight: 500;
+}
+
+.status-stopped {
+  color: #999;
+  font-weight: 500;
 }

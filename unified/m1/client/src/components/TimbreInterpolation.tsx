@@ -16,6 +16,8 @@ const TimbreInterpolation: React.FC<TimbreInterpolationProps> = ({ isConnected, 
   const [isMixing, setIsMixing] = useState<boolean>(false);
   const [currentAudioUrl, setCurrentAudioUrl] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [isRealtimePlaying, setIsRealtimePlaying] = useState<boolean>(false);
+  const [isControllingPlayback, setIsControllingPlayback] = useState<boolean>(false);
   const fileInputARef = useRef<HTMLInputElement>(null);
   const fileInputBRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -33,6 +35,11 @@ const TimbreInterpolation: React.FC<TimbreInterpolationProps> = ({ isConnected, 
       setFileAUploaded(status.sample_a);
       setFileBUploaded(status.sample_b);
       setMixValue(status.current_mix);
+      
+      // Check realtime playback status
+      if (status.realtime_status) {
+        setIsRealtimePlaying(status.realtime_status.is_playing || false);
+      }
     } catch (error) {
       console.error('Error loading timbre status:', error);
     }
@@ -85,18 +92,20 @@ const TimbreInterpolation: React.FC<TimbreInterpolationProps> = ({ isConnected, 
   const performMix = async (mixVal: number) => {
     setIsMixing(true);
     try {
-      // Invert the mix value since the model expects:
-      // r=0 -> 100% sample B, r=1 -> 100% sample A
-      // But our slider shows: 0 -> A, 1 -> B
-      const invertedMix = 1 - mixVal;
-      const result = await apiService.setTimbreMix(invertedMix);
-      onLog?.(`Timbre mix updated: ${(mixVal * 100).toFixed(0)}% B`, 'success');
+      // Send the mix value directly (no inversion needed - handled in backend)
+      const result = await apiService.setTimbreMix(mixVal);
       
-      // If we got an audio URL, play the result automatically
-      if (result.audio_url) {
-        const fullAudioUrl = `http://localhost:8080${result.audio_url}`;
-        setCurrentAudioUrl(fullAudioUrl);
-        playAudio(fullAudioUrl);
+      if (result.is_realtime) {
+        onLog?.(`Real-time mix: ${(mixVal * 100).toFixed(0)}% B`, 'info');
+      } else {
+        onLog?.(`Timbre mix updated: ${(mixVal * 100).toFixed(0)}% B`, 'success');
+        
+        // If we got an audio URL, play the result automatically (fallback mode)
+        if (result.audio_url) {
+          const fullAudioUrl = `http://localhost:8080${result.audio_url}`;
+          setCurrentAudioUrl(fullAudioUrl);
+          playAudio(fullAudioUrl);
+        }
       }
     } catch (error) {
       onLog?.(`Error mixing timbres: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
@@ -140,6 +149,32 @@ const TimbreInterpolation: React.FC<TimbreInterpolationProps> = ({ isConnected, 
   const replayAudio = () => {
     if (currentAudioUrl) {
       playAudio(currentAudioUrl);
+    }
+  };
+
+  const startRealtimePlayback = async () => {
+    setIsControllingPlayback(true);
+    try {
+      const result = await apiService.startRealtimePlayback();
+      setIsRealtimePlaying(true);
+      onLog?.('Real-time playback started', 'success');
+    } catch (error) {
+      onLog?.(`Error starting playback: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+    } finally {
+      setIsControllingPlayback(false);
+    }
+  };
+
+  const stopRealtimePlayback = async () => {
+    setIsControllingPlayback(true);
+    try {
+      const result = await apiService.stopRealtimePlayback();
+      setIsRealtimePlaying(false);
+      onLog?.('Real-time playback stopped', 'info');
+    } catch (error) {
+      onLog?.(`Error stopping playback: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+    } finally {
+      setIsControllingPlayback(false);
     }
   };
 
@@ -256,8 +291,41 @@ const TimbreInterpolation: React.FC<TimbreInterpolationProps> = ({ isConnected, 
         </div>
       </div>
 
-      {/* Audio Controls */}
-      {currentAudioUrl && (
+      {/* Real-time Playback Controls */}
+      {fileAUploaded && fileBUploaded && (
+        <div className="realtime-controls">
+          <h4>Real-time Playback</h4>
+          <div className="playback-controls">
+            {!isRealtimePlaying ? (
+              <button 
+                onClick={startRealtimePlayback}
+                disabled={!isConnected || isControllingPlayback}
+                className="audio-control-btn start-btn"
+              >
+                {isControllingPlayback ? '⏳ Starting...' : '▶️ Start Loop'}
+              </button>
+            ) : (
+              <button 
+                onClick={stopRealtimePlayback}
+                disabled={!isConnected || isControllingPlayback}
+                className="audio-control-btn stop-btn"
+              >
+                {isControllingPlayback ? '⏳ Stopping...' : '⏹ Stop Loop'}
+              </button>
+            )}
+            <div className="playback-status">
+              {isRealtimePlaying ? (
+                <span className="status-playing">🎵 Real-time loop active</span>
+              ) : (
+                <span className="status-stopped">⏸ Loop stopped</span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Audio Controls (fallback mode) */}
+      {currentAudioUrl && !isRealtimePlaying && (
         <div className="audio-controls">
           <button 
             onClick={replayAudio}
@@ -303,7 +371,9 @@ const TimbreInterpolation: React.FC<TimbreInterpolationProps> = ({ isConnected, 
           <p className="status-message">Upload Sample A to enable mixing</p>
         )}
         {!isUploading && !isMixing && fileAUploaded && fileBUploaded && (
-          <p className="status-message status-ready">Ready for timbre interpolation - adjust slider to mix</p>
+          <p className="status-message status-ready">
+            🎵 Real-time timbre interpolation active - adjust slider for live crossfading
+          </p>
         )}
       </div>
     </div>

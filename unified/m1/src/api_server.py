@@ -13,6 +13,8 @@ import os
 import shutil
 import subprocess
 import tempfile
+import sys
+import concurrent.futures
 
 from orchestrator import GlobalConfig, PortRegistry, Orchestrator, md
 
@@ -145,6 +147,8 @@ class OrchestratorService:
         # Timbre interpolation state
         self.timbre_files = {"sample_a": None, "sample_b": None}
         self.current_mix = 0.5
+        self.realtime_player = None
+        self._init_realtime_player()
         self.upload_dir = "uploads"
         os.makedirs(self.upload_dir, exist_ok=True)
     
@@ -256,6 +260,110 @@ class OrchestratorService:
             "beats": beats
         })
     
+    def _init_realtime_player(self):
+        """Initialize the real-time timbre player."""
+        try:
+            # Add the m1-timbre src directory to Python path
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            repo_root = os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
+            m1_timbre_src = os.path.join(repo_root, "safety", "m1-timbre", "src")
+            
+            if m1_timbre_src not in sys.path:
+                sys.path.append(m1_timbre_src)
+            
+            # Import and initialize the real-time player
+            from realtime_player import RealtimeTimbrePlayer
+            
+            self.realtime_player = RealtimeTimbrePlayer()
+            self.realtime_player.set_status_callback(self._realtime_status_callback)
+            
+            logger.info("Real-time timbre player initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize real-time timbre player: {e}")
+            self.realtime_player = None
+    
+    def _realtime_status_callback(self, message: str, status_type: str):
+        """Callback for real-time player status updates."""
+        logger.info(f"Realtime Player [{status_type}]: {message}")
+        
+        # Schedule broadcast in the main event loop (thread-safe)
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Schedule the coroutine to run in the main event loop
+                asyncio.run_coroutine_threadsafe(
+                    self.manager.broadcast({
+                        "type": "realtime_status",
+                        "message": message,
+                        "status_type": status_type
+                    }),
+                    loop
+                )
+        except RuntimeError:
+            # No event loop running, just log
+            logger.warning(f"Could not broadcast realtime status: {message}")
+    
+    async def _check_and_prepare_realtime(self):
+        """Check if both samples are uploaded and prepare real-time interpolations."""
+        if not self.realtime_player:
+            return
+        
+        if self.timbre_files["sample_a"] and self.timbre_files["sample_b"]:
+            sample_a_path = self.timbre_files["sample_a"]["file_path"]
+            sample_b_path = self.timbre_files["sample_b"]["file_path"]
+            
+            logger.info("Both samples uploaded, preparing real-time interpolations...")
+            
+            # Run preparation in thread pool to avoid blocking the event loop
+            import concurrent.futures
+            import threading
+            
+            def prepare_in_thread():
+                try:
+                    success = self.realtime_player.prepare_interpolations(sample_a_path, sample_b_path)
+                    if success:
+                        # Start playback automatically
+                        self.realtime_player.start_playback()
+                        return True
+                    return False
+                except Exception as e:
+                    logger.error(f"Error in preparation thread: {e}")
+                    return False
+            
+            # Use thread pool executor for better error handling
+            loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = loop.run_in_executor(executor, prepare_in_thread)
+                # Don't await here to avoid blocking the upload response
+                asyncio.create_task(self._handle_preparation_result(future))
+    
+    async def _handle_preparation_result(self, future):
+        """Handle the result of real-time preparation."""
+        try:
+            success = await future
+            if success:
+                logger.info("Real-time interpolation preparation completed successfully")
+                await self.manager.broadcast({
+                    "type": "realtime_ready",
+                    "message": "Real-time timbre interpolation is ready",
+                    "status": "success"
+                })
+            else:
+                logger.error("Real-time interpolation preparation failed")
+                await self.manager.broadcast({
+                    "type": "realtime_error",
+                    "message": "Failed to prepare real-time interpolation",
+                    "status": "error"
+                })
+        except Exception as e:
+            logger.error(f"Error handling preparation result: {e}")
+            await self.manager.broadcast({
+                "type": "realtime_error",
+                "message": f"Preparation error: {str(e)}",
+                "status": "error"
+            })
+    
     def get_state(self) -> OrchestratorState:
         return OrchestratorState(
             bpm=self.cfg.bpm,
@@ -292,6 +400,9 @@ class OrchestratorService:
         
         logger.info(f"Uploaded {sample_type}: {file.filename} -> {file_path}")
         
+        # Check if both samples are uploaded and prepare real-time interpolations
+        await self._check_and_prepare_realtime()
+        
         return TimbreUploadResponse(
             filename=file.filename or "unknown",
             file_id=file_id,
@@ -299,110 +410,55 @@ class OrchestratorService:
         )
     
     async def set_timbre_mix(self, mix_value: float):
-        """Set the timbre interpolation mix value and call m1-timbre"""
+        """Set the timbre interpolation mix value for real-time crossfading"""
         self.current_mix = max(0.0, min(1.0, mix_value))
         
         # Check if both files are uploaded
         if not (self.timbre_files["sample_a"] and self.timbre_files["sample_b"]):
             raise ValueError("Both sample A and sample B must be uploaded before mixing")
         
-        # Call m1-timbre app to perform interpolation
-        try:
-            sample_a_path = self.timbre_files["sample_a"]["file_path"]
-            sample_b_path = self.timbre_files["sample_b"]["file_path"]
-            
-            # Create output path
-            output_path = os.path.join(self.upload_dir, f"mixed_{int(asyncio.get_event_loop().time())}.wav")
-            
-            # Call m1-timbre subprocess from the correct working directory
-            # Calculate path to m1-timbre directory
-            # Get the current file's directory, go up to repo root, then to safety/m1-timbre/src
-            current_dir = os.path.dirname(os.path.abspath(__file__))  # unified/m1/src
-            repo_root = os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))  # go up 3 levels to repo root
-            m1_timbre_dir = os.path.join(repo_root, "safety", "m1-timbre", "src")
-            
-            # Alternative path calculation if the first one doesn't work
-            if not os.path.exists(m1_timbre_dir):
-                # Try relative to current working directory
-                alt_m1_timbre_dir = os.path.join(os.getcwd(), "safety", "m1-timbre", "src")
-                if os.path.exists(alt_m1_timbre_dir):
-                    m1_timbre_dir = alt_m1_timbre_dir
-                    logger.info(f"Using alternative path: {m1_timbre_dir}")
-                else:
-                    # Try going up from current working directory
-                    cwd_parent = os.path.dirname(os.getcwd())
-                    alt_m1_timbre_dir2 = os.path.join(cwd_parent, "safety", "m1-timbre", "src")
-                    if os.path.exists(alt_m1_timbre_dir2):
-                        m1_timbre_dir = alt_m1_timbre_dir2
-                        logger.info(f"Using alternative path 2: {m1_timbre_dir}")
-            
-            # Debug: log the path calculation
-            logger.info(f"Current working directory: {os.getcwd()}")
-            logger.info(f"Current file dir: {current_dir}")
-            logger.info(f"Repo root: {repo_root}")
-            logger.info(f"Looking for m1-timbre at: {m1_timbre_dir}")
-            logger.info(f"m1-timbre directory exists: {os.path.exists(m1_timbre_dir)}")
-            
-            # Also check if main.py exists in the directory
-            main_py_path = os.path.join(m1_timbre_dir, "main.py")
-            logger.info(f"main.py exists at {main_py_path}: {os.path.exists(main_py_path)}")
-            
-            cmd = [
-                "python", "-m", "main",
-                "--sample-a", os.path.abspath(sample_a_path),
-                "--sample-b", os.path.abspath(sample_b_path),
-                "--mix", str(self.current_mix),
-                "--output", os.path.abspath(output_path),
-                "--headless"
-            ]
-            
-            # Verify the directory exists
-            if not os.path.exists(m1_timbre_dir):
-                raise FileNotFoundError(f"m1-timbre directory not found: {m1_timbre_dir}")
-            
-            logger.info(f"Calling m1-timbre from {m1_timbre_dir}: {' '.join(cmd)}")
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, cwd=m1_timbre_dir)
-            
-            if result.returncode == 0:
-                logger.info(f"Timbre interpolation successful: {output_path}")
+        # Use real-time player if available
+        if self.realtime_player and self.realtime_player.is_prepared:
+            try:
+                # Update mix in real-time player (no regeneration needed!)
+                self.realtime_player.set_mix(self.current_mix)
+                
+                logger.info(f"Real-time mix updated to: {self.current_mix}")
                 
                 # Broadcast update to connected clients
                 await self.manager.broadcast({
                     "type": "timbre_mix_update",
                     "mix_value": self.current_mix,
-                    "output_file": output_path,
-                    "status": "success"
+                    "status": "realtime_update",
+                    "is_realtime": True
                 })
-                
-                # Create audio URL for frontend
-                filename = os.path.basename(output_path)
-                audio_url = f"/audio/{filename}"
                 
                 return {
                     "status": "success", 
-                    "mix_value": self.current_mix, 
-                    "output_file": output_path,
-                    "audio_url": audio_url
+                    "mix_value": self.current_mix,
+                    "is_realtime": True,
+                    "message": "Real-time crossfade updated"
                 }
-            else:
-                error_msg = f"m1-timbre failed: {result.stderr}"
-                logger.error(error_msg)
-                raise RuntimeError(error_msg)
                 
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("Timbre interpolation timed out")
-        except Exception as e:
-            logger.error(f"Timbre interpolation error: {e}")
-            raise RuntimeError(f"Timbre interpolation failed: {str(e)}")
+            except Exception as e:
+                logger.error(f"Real-time mix update error: {e}")
+                raise RuntimeError(f"Real-time mix update failed: {str(e)}")
+        
+        else:
+            # Fallback to old method if real-time player not available
+            logger.warning("Real-time player not available, falling back to regeneration method")
+            raise RuntimeError("Real-time player not initialized or not prepared")
     
     def get_timbre_status(self):
         """Get current timbre interpolation status"""
+        realtime_status = self.realtime_player.get_status() if self.realtime_player else {}
+        
         return {
             "sample_a": self.timbre_files["sample_a"]["filename"] if self.timbre_files["sample_a"] else None,
             "sample_b": self.timbre_files["sample_b"]["filename"] if self.timbre_files["sample_b"] else None,
             "current_mix": self.current_mix,
-            "ready": bool(self.timbre_files["sample_a"] and self.timbre_files["sample_b"])
+            "ready": bool(self.timbre_files["sample_a"] and self.timbre_files["sample_b"]),
+            "realtime_status": realtime_status
         }
 
 # ---- FastAPI App ----
@@ -580,6 +636,33 @@ async def delete_timbre_sample(sample_type: str):
         return {"status": "deleted", "sample_type": sample_type}
     except Exception as e:
         logger.error(f"Error deleting timbre sample: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/timbre/playback/start")
+async def start_realtime_playback():
+    """Start real-time timbre playback"""
+    try:
+        if not service.realtime_player:
+            raise HTTPException(status_code=400, detail="Real-time player not initialized")
+        
+        success = service.realtime_player.start_playback()
+        if success:
+            return {"status": "success", "message": "Real-time playback started"}
+        else:
+            raise HTTPException(status_code=400, detail="Failed to start playback")
+    except Exception as e:
+        logger.error(f"Error starting real-time playback: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/timbre/playback/stop")
+async def stop_realtime_playback():
+    """Stop real-time timbre playback"""
+    try:
+        if service.realtime_player:
+            service.realtime_player.stop_playback()
+        return {"status": "success", "message": "Real-time playback stopped"}
+    except Exception as e:
+        logger.error(f"Error stopping real-time playback: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ---- WebSocket Endpoint ----

@@ -125,8 +125,20 @@ class ApiService {
     });
   }
 
-  async getTimbreStatus(): Promise<{ sample_a: string | null; sample_b: string | null; current_mix: number; ready: boolean }> {
+  async getTimbreStatus(): Promise<{ sample_a: string | null; sample_b: string | null; current_mix: number; ready: boolean; realtime_status?: any }> {
     return this.request('/timbre/status');
+  }
+
+  async startRealtimePlayback(): Promise<{ status: string; message: string }> {
+    return this.request('/timbre/playback/start', {
+      method: 'POST',
+    });
+  }
+
+  async stopRealtimePlayback(): Promise<{ status: string; message: string }> {
+    return this.request('/timbre/playback/stop', {
+      method: 'POST',
+    });
   }
 
   async deleteTimbreSample(sampleType: 'sample_a' | 'sample_b'): Promise<{ status: string; sample_type: string }> {
