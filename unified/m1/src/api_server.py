@@ -248,6 +248,115 @@ class OrchestratorService:
             "chord": symbol
         })
     
+    async def set_current_chord(self, group_id: str, symbol: str):
+        """Immediately update the current chord"""
+        async with self._lock:
+            self.orch.set_current_chord(group_id, symbol)
+        
+        await self.manager.broadcast({
+            "type": "chord_updated",
+            "chord": symbol
+        })
+    
+    async def queue_chord_by_tension(self, group_id: str, tension: float):
+        """Queue chord for next measure based on tension value"""
+        async with self._lock:
+            # Get the harmonic instrument
+            harm_inst = self.orch._harm_groups.get(group_id)
+            if harm_inst and harm_inst.hg:
+                # Only queue chord if tension is significant, otherwise let orchestrator use default
+                if tension > 0.05:  # Only queue if tension > 5%
+                    new_chord = harm_inst.hg.select_chord_by_tension(
+                        current_tension=tension,
+                        previous_chord=harm_inst._prev,
+                        lambda_balance=1.0
+                    )
+                    # Queue it for next measure (replaces any existing queued chord)
+                    harm_inst.queue_next_chord(new_chord)
+                    
+                    logger.info(f"Queued chord by tension {tension}: {new_chord} (prev: {harm_inst._prev})")
+                    
+                    await self.manager.broadcast({
+                        "type": "chord_queued",
+                        "chord": new_chord,
+                        "tension": tension
+                    })
+                    
+                    return new_chord
+                else:
+                    # Clear any queued chord to let orchestrator use default
+                    harm_inst._queued_next = None
+                    default_chord = f"{self.orch.cfg.key_root}_M"
+                    
+                    logger.info(f"Low tension {tension}, cleared queue for default chord: {default_chord}")
+                    
+                    await self.manager.broadcast({
+                        "type": "chord_cleared",
+                        "chord": default_chord,
+                        "tension": tension
+                    })
+                    
+                    return default_chord
+            else:
+                raise RuntimeError(f"Harmonic group {group_id} not found")
+        
+        return "C_M"  # fallback
+    
+    async def queue_custom_chord(self, group_id: str, notes: List[int]):
+        """Queue a custom chord from MIDI notes"""
+        async with self._lock:
+            # Convert MIDI notes to chord symbol
+            chord_symbol = self._notes_to_chord_symbol(notes)
+            
+            # Get the harmonic instrument and queue the chord
+            harm_inst = self.orch._harm_groups.get(group_id)
+            if harm_inst:
+                harm_inst.queue_next_chord(chord_symbol)
+                
+                logger.info(f"Queued custom chord from notes {notes}: {chord_symbol}")
+                
+                await self.manager.broadcast({
+                    "type": "chord_queued",
+                    "chord": chord_symbol,
+                    "notes": notes,
+                    "custom": True
+                })
+                
+                return chord_symbol
+            else:
+                raise RuntimeError(f"Harmonic group {group_id} not found")
+    
+    def _notes_to_chord_symbol(self, notes: List[int]) -> str:
+        """Convert MIDI note numbers to chord symbol"""
+        if len(notes) < 3:
+            return "C_M"  # fallback
+        
+        # Sort notes and get the root (lowest note)
+        sorted_notes = sorted(notes)
+        root_note = sorted_notes[0] % 12
+        
+        # Map MIDI note numbers to note names
+        note_names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+        root_name = note_names[root_note]
+        
+        # Calculate intervals from root
+        intervals = [(note - sorted_notes[0]) % 12 for note in sorted_notes[1:]]
+        
+        # Determine chord quality based on intervals
+        if 4 in intervals and 7 in intervals:  # Major triad
+            return f"{root_name}_M"
+        elif 3 in intervals and 7 in intervals:  # Minor triad
+            return f"{root_name}_m"
+        elif 4 in intervals and 10 in intervals:  # Dominant 7th
+            return f"{root_name}_7"
+        elif 3 in intervals and 10 in intervals:  # Minor 7th
+            return f"{root_name}_m7"
+        elif 4 in intervals and 11 in intervals:  # Major 7th
+            return f"{root_name}_M7"
+        else:
+            # Default to major if we can't identify
+            return f"{root_name}_M"
+    
     async def trigger_fill(self, preset: str, beats: int):
         async with self._lock:
             drums = self.orch._percussion.get("drums")
@@ -256,6 +365,19 @@ class OrchestratorService:
         
         await self.manager.broadcast({
             "type": "fill_triggered",
+            "preset": preset,
+            "beats": beats
+        })
+    
+    async def queue_fill_for_next_measure(self, preset: str, beats: int):
+        async with self._lock:
+            drums = self.orch._percussion.get("drums")
+            if drums:
+                # Queue fill for next measure instead of immediate trigger
+                drums.queue_fill_beats(beats, preset=preset)
+        
+        await self.manager.broadcast({
+            "type": "fill_queued",
             "preset": preset,
             "beats": beats
         })
@@ -617,6 +739,32 @@ async def queue_chord(chord: ChordOverride):
         logger.error(f"Error queuing chord: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+class ChordTensionRequest(BaseModel):
+    tension: float = Field(..., ge=0.0, le=1.0, description="Tension value for chord selection")
+    group_id: str = Field(default="harm", description="Harmonic group ID")
+
+@app.post("/chord/queue-by-tension")
+async def queue_chord_by_tension(request: ChordTensionRequest):
+    try:
+        chord_symbol = await service.queue_chord_by_tension(request.group_id, request.tension)
+        return {"status": "ok", "chord": chord_symbol}
+    except Exception as e:
+        logger.error(f"Error queuing chord by tension: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class CustomChordRequest(BaseModel):
+    notes: List[int] = Field(..., description="Array of MIDI note numbers for custom chord")
+    group_id: str = Field(default="harm", description="Harmonic group ID")
+
+@app.post("/chord/queue-custom")
+async def queue_custom_chord(request: CustomChordRequest):
+    try:
+        chord_symbol = await service.queue_custom_chord(request.group_id, request.notes)
+        return {"status": "ok", "chord": chord_symbol}
+    except Exception as e:
+        logger.error(f"Error queuing custom chord: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/fill")
 async def trigger_fill(fill: DrumFill):
     try:
@@ -624,6 +772,15 @@ async def trigger_fill(fill: DrumFill):
         return {"status": "ok", "preset": fill.preset, "beats": fill.beats}
     except Exception as e:
         logger.error(f"Error triggering fill: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/fill/queue")
+async def queue_fill_for_next_measure(fill: DrumFill):
+    try:
+        await service.queue_fill_for_next_measure(fill.preset, fill.beats)
+        return {"status": "ok", "preset": fill.preset, "beats": fill.beats, "queued": True}
+    except Exception as e:
+        logger.error(f"Error queuing fill: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ---- Timbre Interpolation Endpoints ----

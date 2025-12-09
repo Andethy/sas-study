@@ -28,9 +28,10 @@ interface TensionCanvasProps {
   isAutomationMode?: boolean;
   midiControllerState?: MidiControllerState | null;
   activeInputSource?: 'mouse' | 'midi';
+  onMouseActiveChange?: (isActive: boolean) => void;
 }
 
-const TensionCanvas: React.FC<TensionCanvasProps> = ({ tensions, onTensionUpdate, isAutomationMode = false, midiControllerState = null, activeInputSource = 'mouse' }) => {
+const TensionCanvas: React.FC<TensionCanvasProps> = ({ tensions, onTensionUpdate, isAutomationMode = false, midiControllerState = null, activeInputSource = 'mouse', onMouseActiveChange }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [canvasSize, setCanvasSize] = useState<{ width: number; height: number }>({ width: 600, height: 600 });
   const [isDragging, setIsDragging] = useState<boolean>(false);
@@ -247,6 +248,9 @@ const TensionCanvas: React.FC<TensionCanvasProps> = ({ tensions, onTensionUpdate
     
     console.log('Mouse/touch start at:', pos, 'Distance from point:', distance);
     
+    // Notify parent that mouse is now active
+    onMouseActiveChange?.(true);
+    
     if (distance <= 20) { // Within dragging range
       console.log('Starting drag');
       setIsDragging(true);
@@ -272,6 +276,9 @@ const TensionCanvas: React.FC<TensionCanvasProps> = ({ tensions, onTensionUpdate
   const handleEnd = (event: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
     event.preventDefault();
     setIsDragging(false);
+    
+    // Notify parent that mouse is no longer active
+    onMouseActiveChange?.(false);
   };
 
   // Click to move point

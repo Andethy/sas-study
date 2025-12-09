@@ -53,8 +53,14 @@ function App() {
   const [lastMaxTension, setLastMaxTension] = useState<number>(0);
   const [isAutomationMode, setIsAutomationMode] = useState<boolean>(false);
   const [midiControlledTensions, setMidiControlledTensions] = useState<Tensions>({ zone1: 0.5, zone2: 0.5, zone3: 0.5 });
-  const [inputSource, setInputSource] = useState<'mouse' | 'midi'>('mouse');
+  const [inputSource, setInputSource] = useState<'mouse' | 'midi'>('midi'); // Default to MIDI priority
+  const [isMouseActive, setIsMouseActive] = useState<boolean>(false);
   const lastInputTimeRef = useRef<{ mouse: number; midi: number }>({ mouse: 0, midi: 0 });
+  
+  // Keyboard chord override state
+  const [activeNotes, setActiveNotes] = useState<Set<number>>(new Set());
+  const [chordOverrideActive, setChordOverrideActive] = useState<boolean>(false);
+  const measureStartTimeRef = useRef<number>(0);
 
   // WebSocket connection
   const { lastMessage, connectionStatus } = useWebSocket(WS_URL);
@@ -63,7 +69,7 @@ function App() {
   const addLog = useCallback((message: string, type: LogEntry['type'] = 'info') => {
     const timestamp = new Date().toLocaleTimeString();
     setLogs(prev => [...prev.slice(-49), { // Keep last 50 entries
-      id: Date.now(),
+      id: Date.now() + Math.random(), // Ensure unique IDs
       timestamp,
       message,
       type
@@ -97,6 +103,89 @@ function App() {
       addLog(`MIDI Master Volume Error: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
     }
   }, [addLog]);
+
+  const handleMidiDrumPadPress = useCallback(async (padNumber: number, velocity: number) => {
+    try {
+      // Map pad numbers to fill presets
+      const fillPresets = ['snare', 'toms', 'hats'];
+      const preset = fillPresets[padNumber - 1];
+      
+      if (preset) {
+        // Use velocity to determine fill length (1-4 beats)
+        const beats = Math.max(1, Math.ceil(velocity * 4));
+        
+        try {
+          await apiService.triggerFill(preset, beats);
+          addLog(`MIDI Pad ${padNumber}: ${preset} fill (${beats} beats)`, 'success');
+        } catch (error) {
+          // If fill fails (not enough beats), queue for next measure
+          console.log('Fill failed, queuing for next measure:', error);
+          await apiService.queueFillForNextMeasure(preset, beats);
+          addLog(`MIDI Pad ${padNumber}: ${preset} fill queued for next measure (${beats} beats)`, 'info');
+        }
+      }
+    } catch (error) {
+      addLog(`MIDI Drum Pad Error: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+    }
+  }, [addLog]);
+
+  const handleMidiKeyboardNote = useCallback(async (note: number, velocity: number, isNoteOn: boolean) => {
+    console.log('🎹 handleMidiKeyboardNote called:', { note, velocity, isNoteOn });
+    
+    // Since we're getting Note Off messages when keys are pressed, 
+    // let's treat them as momentary chord triggers
+    if (isNoteOn) {
+      console.log('🎹 Key pressed - adding to chord buffer');
+      
+      setActiveNotes(prev => {
+        const newSet = new Set([...prev, note]);
+        console.log('🎹 Active notes:', Array.from(newSet));
+        
+        // Auto-clear old notes after 2 seconds to prevent buildup
+        setTimeout(() => {
+          setActiveNotes(current => {
+            const filtered = new Set([...current].filter(n => n !== note));
+            console.log('🎹 Auto-cleared note:', note, 'Remaining:', Array.from(filtered));
+            return filtered;
+          });
+        }, 2000);
+        
+        // Check if we have exactly 3 notes
+        if (newSet.size === 3) {
+          console.log('🎹 3 notes detected! Creating chord...');
+          const noteArray = Array.from(newSet).sort((a, b) => a - b);
+          
+          // Immediate chord creation
+          setTimeout(async () => {
+            try {
+              await apiService.queueCustomChord(noteArray);
+              setChordOverrideActive(true);
+              addLog(`MIDI Chord: ${noteArray.join(', ')} (${noteArray.map(n => getNoteNameFromMidi(n)).join('-')})`, 'success');
+              
+              // Auto-disable after 4 seconds
+              setTimeout(() => {
+                setChordOverrideActive(false);
+                setActiveNotes(new Set());
+                addLog('Chord override auto-disabled', 'info');
+              }, 4000);
+            } catch (error) {
+              addLog(`MIDI Chord Error: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+            }
+          }, 100);
+        }
+        
+        return newSet;
+      });
+    }
+  }, [chordOverrideActive, addLog]);
+
+  // Helper function for note names (moved to App component)
+  const getNoteNameFromMidi = (midiNote: number): string => {
+    const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    const octave = Math.floor(midiNote / 12) - 1;
+    const noteName = noteNames[midiNote % 12];
+    return `${noteName}${octave}`;
+  };
 
   // Create refs for functions that will be used in MIDI handlers
   const handleTensionUpdateRef = useRef<((tensions: Tensions) => void) | null>(null);
@@ -234,14 +323,19 @@ function App() {
     const now = Date.now();
     lastInputTimeRef.current[source] = now;
     
-    // Check if this input should be ignored due to recent input from another source
-    const otherSource = source === 'mouse' ? 'midi' : 'mouse';
-    const timeSinceOtherInput = now - lastInputTimeRef.current[otherSource];
-    
-    // If the other input source was active within the last 200ms, ignore this update
-    if (timeSinceOtherInput < 200 && inputSource !== source) {
-      console.log(`Ignoring ${source} input due to recent ${otherSource} activity`);
+    // MIDI always has priority unless mouse is actively being used
+    if (source === 'mouse' && !isMouseActive) {
+      console.log('Ignoring mouse input - not actively clicking');
       return;
+    }
+    
+    if (source === 'midi' && isMouseActive) {
+      // MIDI overrides mouse after a short delay when mouse stops being active
+      const timeSinceMouseInput = now - lastInputTimeRef.current.mouse;
+      if (timeSinceMouseInput < 500) { // 500ms grace period for mouse
+        console.log('Ignoring MIDI input - mouse recently active');
+        return;
+      }
     }
     
     // Update active input source
@@ -283,9 +377,26 @@ function App() {
       console.log('🚀 Timeout callback executing for tensions:', newTensions);
       try {
         console.log('📤 Sending tension update to API:', newTensions);
-        const result = await apiService.updateTension(newTensions);
-        console.log('✅ API response:', result);
-        addLog(`Tensions updated: ${Object.entries(newTensions).map(([k,v]) => `${k}=${v.toFixed(2)}`).join(', ')}`, 'success');
+        // Send tension update AND immediately queue chord for next measure
+        const maxTension = Math.max(newTensions.zone1, newTensions.zone2, newTensions.zone3);
+        
+        try {
+          // Always update tensions
+          const tensionResult = await apiService.updateTension(newTensions);
+          console.log('✅ Tension result:', tensionResult);
+          
+          // Only queue chord by tension if no manual chord override is active
+          if (!chordOverrideActive) {
+            const chordResult = await apiService.queueChordByTension(maxTension);
+            console.log('🎵 Auto chord result:', chordResult);
+            addLog(`Tensions: ${Object.entries(newTensions).map(([k,v]) => `${k}=${v.toFixed(2)}`).join(', ')} | Auto chord: ${chordResult.chord}`, 'success');
+          } else {
+            addLog(`Tensions: ${Object.entries(newTensions).map(([k,v]) => `${k}=${v.toFixed(2)}`).join(', ')} | Manual chord active`, 'info');
+          }
+        } catch (error) {
+          console.error('Error updating tension/chord:', error);
+          addLog(`Error updating tension: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+        }
       } catch (error) {
         console.error('❌ Tension update error:', error);
         addLog(`Error updating tension: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
@@ -364,6 +475,8 @@ function App() {
     onTimbreMixChange: handleMidiTimbreMixChange,
     onMasterVolumeChange: handleMidiMasterVolumeChange,
     onJoystickChange: handleMidiJoystickChange,
+    onDrumPadPress: handleMidiDrumPadPress,
+    onKeyboardNote: handleMidiKeyboardNote,
     onLog: addLog
   });
 
@@ -386,6 +499,11 @@ function App() {
                 <span>K3-TMix: {(controllerState.k3Knob * 100).toFixed(0)}%</span>
                 <span>K4-MVol: {(controllerState.k4Knob * 100).toFixed(0)}%</span>
                 <span>Joy: ({controllerState.joystickX.toFixed(2)}, {controllerState.joystickY.toFixed(2)})</span>
+                {chordOverrideActive && (
+                  <span className="chord-override-indicator">
+                    🎹 Manual Chord ({activeNotes.size}/3)
+                  </span>
+                )}
               </div>
             </div>
           )}
@@ -400,6 +518,7 @@ function App() {
             isAutomationMode={isAutomationMode}
             midiControllerState={midiConnected ? controllerState : null}
             activeInputSource={inputSource}
+            onMouseActiveChange={setIsMouseActive}
           />
           
           <div className="tension-display">

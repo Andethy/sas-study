@@ -93,8 +93,29 @@ class ApiService {
     });
   }
 
+  async queueChordByTension(tension: number, group_id: string = 'harm'): Promise<{ status: string; chord: string }> {
+    return this.request('/chord/queue-by-tension', {
+      method: 'POST',
+      body: JSON.stringify({ tension, group_id }),
+    });
+  }
+
+  async queueCustomChord(notes: number[], group_id: string = 'harm'): Promise<{ status: string; chord: string }> {
+    return this.request('/chord/queue-custom', {
+      method: 'POST',
+      body: JSON.stringify({ notes, group_id }),
+    });
+  }
+
   async triggerFill(preset: string, beats: number): Promise<{ status: string; preset: string; beats: number }> {
     return this.request('/fill', {
+      method: 'POST',
+      body: JSON.stringify({ preset, beats }),
+    });
+  }
+
+  async queueFillForNextMeasure(preset: string, beats: number): Promise<{ status: string }> {
+    return this.request('/fill/queue', {
       method: 'POST',
       body: JSON.stringify({ preset, beats }),
     });

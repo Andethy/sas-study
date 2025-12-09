@@ -296,13 +296,23 @@ class HarmonicInstrument(Instrument):
 
     def queue_next_chord(self, symbol: str):
         self._queued_next = symbol
+    
+    def set_current_chord(self, symbol: str):
+        """Immediately update the current chord (for real-time tension control)"""
+        self._prev = symbol
+        # Clear any queued chord since we're setting current
+        self._queued_next = None
 
     def _select_symbol(self, max_tension: float) -> str:
+        # Always prioritize queued chords
         if self._queued_next:
             sym = self._queued_next
             self._queued_next = None
             self._prev = sym
+            print(f"Using queued chord: {sym}")
             return sym
+        
+        # Only use automatic tension-based selection if no chord is queued
         if max_tension > 0:
             sym = self.hg.select_chord_by_tension(
                 current_tension=max_tension,
@@ -310,8 +320,10 @@ class HarmonicInstrument(Instrument):
                 lambda_balance=1.0,
                 k=1
             )
+            print(f"Auto-selected chord by tension {max_tension}: {sym}")
         else:
             sym = f"{self.cfg.key_root}_M"
+            print(f"Default chord (low tension): {sym}")
         self._prev = sym
         return sym
 
@@ -453,6 +465,10 @@ class Orchestrator:
 
     def queue_next_chord(self, group_id: str, symbol: str):
         self._harm_groups[group_id].queue_next_chord(symbol)
+    
+    def set_current_chord(self, group_id: str, symbol: str):
+        """Immediately update the current chord"""
+        self._harm_groups[group_id].set_current_chord(symbol)
 
     # ---- Scheduler phases ----
     def _on_downbeat_phase(self, bar_idx: int):
