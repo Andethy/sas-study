@@ -72,6 +72,11 @@ class RealtimeTimbrePlayer:
         # Playback state
         self.current_playing_mix = 0.5  # The mix ratio currently being played
         self.target_mix = 0.5  # The target mix ratio (from slider)
+        self.volume = 1.0  # Volume level (0.0 to 1.0)
+        
+        # Advanced crossfading parameters
+        self.chunk_overlap_ratio = 0.5  # 50% overlap between chunks
+        self.fade_duration = 0.1  # 100ms fade in/out for each chunk
         
         # Callback for status updates
         self.status_callback: Optional[Callable[[str, str], None]] = None
@@ -179,6 +184,15 @@ class RealtimeTimbrePlayer:
         self.target_mix = max(0.0, min(1.0, mix_value))
         self.current_mix = self.target_mix  # Also update current for immediate response
 
+    def set_volume(self, volume: float):
+        """
+        Set the playback volume.
+        
+        Args:
+            volume: Volume level from 0.0 (silent) to 1.0 (full volume)
+        """
+        self.volume = max(0.0, min(1.0, volume))
+
     def _crossfade_audio(self, audio1: np.ndarray, audio2: np.ndarray, fade_ratio: float) -> np.ndarray:
         """
         Crossfade between two audio arrays.
@@ -196,6 +210,35 @@ class RealtimeTimbrePlayer:
         audio2_trimmed = audio2[:min_len]
         
         return (audio1_trimmed * (1.0 - fade_ratio) + audio2_trimmed * fade_ratio).astype(np.int16)
+    
+    def _apply_fade_envelope(self, audio: np.ndarray, fade_in_samples: int, fade_out_samples: int) -> np.ndarray:
+        """
+        Apply fade-in and fade-out envelopes to audio to prevent clicks and pops.
+        
+        Args:
+            audio: Input audio array
+            fade_in_samples: Number of samples for fade-in
+            fade_out_samples: Number of samples for fade-out
+            
+        Returns:
+            Audio with fade envelopes applied
+        """
+        if len(audio) == 0:
+            return audio
+        
+        audio_float = audio.astype(np.float32)
+        
+        # Apply fade-in
+        if fade_in_samples > 0 and len(audio) > fade_in_samples:
+            fade_in_curve = np.linspace(0.0, 1.0, fade_in_samples)
+            audio_float[:fade_in_samples] *= fade_in_curve
+        
+        # Apply fade-out
+        if fade_out_samples > 0 and len(audio) > fade_out_samples:
+            fade_out_curve = np.linspace(1.0, 0.0, fade_out_samples)
+            audio_float[-fade_out_samples:] *= fade_out_curve
+        
+        return audio_float.astype(np.int16)
 
     def _get_current_audio(self) -> np.ndarray:
         """
@@ -246,7 +289,7 @@ class RealtimeTimbrePlayer:
             )
 
     def _play_loop(self):
-        """Main playback loop with real-time crossfading."""
+        """Main playback loop with smooth overlapping crossfades."""
         self._log_status("Starting real-time crossfading playback loop", "info")
         
         # Check if pygame mixer is available
@@ -257,57 +300,75 @@ class RealtimeTimbrePlayer:
         # Initialize playback state
         self.current_playing_mix = self.current_mix
         loop_start_time = time.time()
+        last_chunk_time = 0
+        
+        # Chunk parameters for smooth overlapping playback
+        chunk_duration = 1.0  # 1 second chunks
+        overlap_duration = 0.5  # 500ms overlap
+        chunk_interval = chunk_duration - overlap_duration  # 500ms between chunk starts
         
         while not self.stop_event.is_set():
             try:
                 current_time = time.time()
-                loop_elapsed = (current_time - loop_start_time) % self.loop_duration
                 
-                # Determine what mix to play based on loop position and target
-                if loop_elapsed < self.crossfade_start_time:
-                    # First part of loop: play current mix
-                    playback_mix = self.current_playing_mix
-                else:
-                    # Second part of loop: crossfade to target mix
-                    crossfade_progress = (loop_elapsed - self.crossfade_start_time) / (self.loop_duration - self.crossfade_start_time)
-                    crossfade_progress = min(1.0, crossfade_progress)
+                # Check if it's time to start a new chunk
+                if current_time - last_chunk_time >= chunk_interval:
+                    loop_elapsed = (current_time - loop_start_time) % self.loop_duration
                     
-                    # Smooth crossfade from current to target
-                    playback_mix = self.current_playing_mix * (1.0 - crossfade_progress) + self.target_mix * crossfade_progress
+                    # Determine what mix to play based on loop position and target
+                    if loop_elapsed < self.crossfade_start_time:
+                        # First part of loop: play current mix
+                        playback_mix = self.current_playing_mix
+                    else:
+                        # Second part of loop: crossfade to target mix
+                        crossfade_progress = (loop_elapsed - self.crossfade_start_time) / (self.loop_duration - self.crossfade_start_time)
+                        crossfade_progress = min(1.0, crossfade_progress)
+                        
+                        # Smooth crossfade from current to target
+                        playback_mix = self.current_playing_mix * (1.0 - crossfade_progress) + self.target_mix * crossfade_progress
+                    
+                    # Get audio for the calculated mix
+                    audio_data = self._get_audio_for_mix(playback_mix)
+                    
+                    if len(audio_data) > 0:
+                        # Create 1-second chunk with proper fade envelopes
+                        chunk_samples = int(self.system_sr * chunk_duration)
+                        if len(audio_data) > chunk_samples:
+                            audio_chunk = audio_data[:chunk_samples]
+                        else:
+                            # Loop the audio if it's shorter than chunk duration
+                            repeats_needed = int(np.ceil(chunk_samples / len(audio_data)))
+                            audio_chunk = np.tile(audio_data, repeats_needed)[:chunk_samples]
+                        
+                        # Apply smooth fade envelopes for overlapping
+                        fade_samples = int(self.system_sr * overlap_duration)  # 500ms fade in/out
+                        audio_chunk = self._apply_fade_envelope(audio_chunk, fade_samples, fade_samples)
+                        
+                        # Apply volume control
+                        if self.volume != 1.0:
+                            audio_chunk = (audio_chunk.astype(np.float32) * self.volume).astype(np.int16)
+                        
+                        # Play the chunk (non-blocking)
+                        try:
+                            sound = pygame.sndarray.make_sound(audio_chunk)
+                            sound.play()  # Don't wait for completion - allows overlapping
+                        except Exception as e:
+                            self._log_status(f"Error playing audio chunk: {e}", "error")
+                    
+                    last_chunk_time = current_time
+                    
+                    # Check if we've completed a loop
+                    if loop_elapsed >= self.loop_duration - chunk_interval:
+                        # Update current playing mix to target for next loop
+                        self.current_playing_mix = self.target_mix
+                        loop_start_time = current_time
                 
-                # Get audio for the calculated mix
-                audio_data = self._get_audio_for_mix(playback_mix)
-                
-                if len(audio_data) == 0:
-                    time.sleep(0.01)
-                    continue
-                
-                # Create and play longer audio chunk (500ms for smooth playback)
-                chunk_samples = int(self.system_sr * 0.5)  # 500ms chunks
-                if len(audio_data) > chunk_samples:
-                    audio_chunk = audio_data[:chunk_samples]
-                else:
-                    audio_chunk = audio_data
-                
-                # Create pygame sound object
-                sound = pygame.sndarray.make_sound(audio_chunk)
-                
-                # Play the sound
-                channel = sound.play()
-                
-                # Wait for this chunk to finish
-                while channel.get_busy() and not self.stop_event.is_set():
-                    time.sleep(0.001)  # Very small sleep
-                
-                # Check if we've completed a loop
-                if loop_elapsed >= self.loop_duration - 0.5:  # Near end of loop
-                    # Update current playing mix to target for next loop
-                    self.current_playing_mix = self.target_mix
-                    loop_start_time = current_time
+                # Small sleep to prevent busy waiting
+                time.sleep(0.01)
                 
             except Exception as e:
                 self._log_status(f"Error in playback loop: {e}", "error")
-                time.sleep(0.01)  # Brief pause before retrying
+                time.sleep(0.1)  # Brief pause before retrying
 
     def start_playback(self) -> bool:
         """

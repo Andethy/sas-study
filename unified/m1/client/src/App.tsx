@@ -5,6 +5,7 @@ import StatusLog from './components/StatusLog';
 import TimbreInterpolation from './components/TimbreInterpolation';
 import TensionAutomation from './components/TensionAutomation';
 import { useWebSocket } from './hooks/useWebSocket';
+import { useMidiInput } from './hooks/useMidiInput';
 import { apiService } from './services/apiService';
 
 const WS_URL = import.meta.env.PROD
@@ -51,6 +52,9 @@ function App() {
   const [activeTab, setActiveTab] = useState<'controls' | 'timbre' | 'automation'>('controls');
   const [lastMaxTension, setLastMaxTension] = useState<number>(0);
   const [isAutomationMode, setIsAutomationMode] = useState<boolean>(false);
+  const [midiControlledTensions, setMidiControlledTensions] = useState<Tensions>({ zone1: 0.5, zone2: 0.5, zone3: 0.5 });
+  const [inputSource, setInputSource] = useState<'mouse' | 'midi'>('mouse');
+  const lastInputTimeRef = useRef<{ mouse: number; midi: number }>({ mouse: 0, midi: 0 });
 
   // WebSocket connection
   const { lastMessage, connectionStatus } = useWebSocket(WS_URL);
@@ -65,6 +69,81 @@ function App() {
       type
     }]);
   }, []);
+
+  // MIDI Input handlers
+  const handleMidiTimbreVolumeChange = useCallback(async (volume: number) => {
+    try {
+      await apiService.setTimbreVolume(volume);
+      addLog(`MIDI K2: Timbre volume set to ${(volume * 100).toFixed(0)}%`, 'info');
+    } catch (error) {
+      addLog(`MIDI Timbre Volume Error: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+    }
+  }, [addLog]);
+
+  const handleMidiTimbreMixChange = useCallback(async (mix: number) => {
+    try {
+      await apiService.setTimbreMix(mix);
+      addLog(`MIDI K3: Timbre mix set to ${(mix * 100).toFixed(0)}% B`, 'info');
+    } catch (error) {
+      addLog(`MIDI Timbre Mix Error: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+    }
+  }, [addLog]);
+
+  const handleMidiMasterVolumeChange = useCallback(async (volume: number) => {
+    try {
+      await apiService.setMasterVolume(volume);
+      addLog(`MIDI K4: Master volume set to ${(volume * 100).toFixed(0)}%`, 'info');
+    } catch (error) {
+      addLog(`MIDI Master Volume Error: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+    }
+  }, [addLog]);
+
+  // Create refs for functions that will be used in MIDI handlers
+  const handleTensionUpdateRef = useRef<((tensions: Tensions) => void) | null>(null);
+  
+  const handleMidiJoystickChange = useCallback((x: number, y: number) => {
+    // Map joystick to tension canvas with bottom-center origin
+    // Joystick: x=[-1,1], y=[0,1] where y=0 is bottom, y=1 is top
+    // Canvas: x=[0,1], y=[0,1] where y=0 is top, y=1 is bottom
+    
+    // Convert joystick coordinates to canvas coordinates
+    const canvasX = (x + 1) / 2; // Convert -1,1 to 0,1
+    const canvasY = 1 - y; // Convert 0,1 to 1,0 (flip Y axis: joystick 0=bottom -> canvas 1=bottom)
+    
+    // Calculate tensions based on distance from zones (same logic as TensionCanvas)
+    const zones = [
+      { x: 0.2, y: 0.5 },  // Zone 1 (left)
+      { x: 0.5, y: 0.2 },  // Zone 2 (top)
+      { x: 0.8, y: 0.5 }   // Zone 3 (right)
+    ];
+    
+    const newTensions = zones.map((zone, index) => {
+      const distance = Math.sqrt(
+        Math.pow(canvasX - zone.x, 2) + Math.pow(canvasY - zone.y, 2)
+      );
+      const maxDistance = 0.5; // Half canvas width as influence radius
+      const tension = Math.max(0, 1 - (distance / maxDistance));
+      return tension;
+    });
+    
+    const tensionUpdate = {
+      zone1: newTensions[0],
+      zone2: newTensions[1],
+      zone3: newTensions[2]
+    };
+    
+    setMidiControlledTensions(tensionUpdate);
+    
+    // Track MIDI input timing and set as active input source
+    const now = Date.now();
+    lastInputTimeRef.current.midi = now;
+    setInputSource('midi');
+    
+    // Use ref to call handleTensionUpdate if available
+    if (!isAutomationMode && handleTensionUpdateRef.current) {
+      handleTensionUpdateRef.current(tensionUpdate, 'midi');
+    }
+  }, [isAutomationMode]);
 
   // Update connection status
   useEffect(() => {
@@ -148,8 +227,25 @@ function App() {
   // Tension update handler with throttling
   const tensionUpdateTimeoutRef = useRef<number | null>(null);
   
-  const handleTensionUpdate = useCallback((newTensions: Tensions) => {
-    console.log('Tension update received:', newTensions);
+  const handleTensionUpdate = useCallback((newTensions: Tensions, source: 'mouse' | 'midi' = 'mouse') => {
+    console.log('Tension update received:', newTensions, 'from:', source);
+    
+    // Track input source and timing
+    const now = Date.now();
+    lastInputTimeRef.current[source] = now;
+    
+    // Check if this input should be ignored due to recent input from another source
+    const otherSource = source === 'mouse' ? 'midi' : 'mouse';
+    const timeSinceOtherInput = now - lastInputTimeRef.current[otherSource];
+    
+    // If the other input source was active within the last 200ms, ignore this update
+    if (timeSinceOtherInput < 200 && inputSource !== source) {
+      console.log(`Ignoring ${source} input due to recent ${otherSource} activity`);
+      return;
+    }
+    
+    // Update active input source
+    setInputSource(source);
     
     // Check if tensions actually changed to prevent unnecessary updates
     const currentTensions = tensions;
@@ -199,6 +295,11 @@ function App() {
     tensionUpdateTimeoutRef.current = timeoutId;
     console.log('Set new timeout:', timeoutId);
   }, [addLog, lastMaxTension]);
+
+  // Update the ref so MIDI handlers can use it
+  useEffect(() => {
+    handleTensionUpdateRef.current = handleTensionUpdate;
+  }, [handleTensionUpdate]);
 
   // Control handlers
   const handleBPMUpdate = async (bpm: number) => {
@@ -257,6 +358,15 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyPress);
   }, [handleFillTrigger, addLog]);
 
+  // MIDI connection
+  const { isConnected: midiConnected, deviceName, controllerState } = useMidiInput({
+    onTimbreVolumeChange: handleMidiTimbreVolumeChange,
+    onTimbreMixChange: handleMidiTimbreMixChange,
+    onMasterVolumeChange: handleMidiMasterVolumeChange,
+    onJoystickChange: handleMidiJoystickChange,
+    onLog: addLog
+  });
+
   return (
     <div className="container">
       <header>
@@ -268,6 +378,17 @@ function App() {
           <span className="status-text">
             {isConnected ? 'Connected' : 'Disconnected'}
           </span>
+          {midiConnected && (
+            <div className="midi-status">
+              <span className="midi-device">{deviceName || 'MIDI Connected'}</span>
+              <div className="midi-values">
+                <span>K2-TVol: {(controllerState.k2Knob * 100).toFixed(0)}%</span>
+                <span>K3-TMix: {(controllerState.k3Knob * 100).toFixed(0)}%</span>
+                <span>K4-MVol: {(controllerState.k4Knob * 100).toFixed(0)}%</span>
+                <span>Joy: ({controllerState.joystickX.toFixed(2)}, {controllerState.joystickY.toFixed(2)})</span>
+              </div>
+            </div>
+          )}
         </div>
       </header>
 
@@ -277,6 +398,8 @@ function App() {
             tensions={tensions}
             onTensionUpdate={handleTensionUpdate}
             isAutomationMode={isAutomationMode}
+            midiControllerState={midiConnected ? controllerState : null}
+            activeInputSource={inputSource}
           />
           
           <div className="tension-display">

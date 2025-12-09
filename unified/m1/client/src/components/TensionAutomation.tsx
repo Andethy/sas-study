@@ -7,7 +7,7 @@ interface Point {
 
 interface TensionAutomationProps {
   isConnected: boolean;
-  onTensionUpdate: (tensions: { zone1: number; zone2: number; zone3: number }) => void;
+  onTensionUpdate: (tensions: { zone1: number; zone2: number; zone3: number }, source?: 'mouse' | 'midi') => void;
   onAutomationModeChange: (isActive: boolean) => void;
 }
 
@@ -274,7 +274,7 @@ const TensionAutomation: React.FC<TensionAutomationProps> = ({ isConnected, onTe
           zone1: tensionValue,
           zone2: tensionValue,
           zone3: tensionValue
-        });
+        }, 'mouse'); // Automation is considered mouse input
         
         return newTime;
       });

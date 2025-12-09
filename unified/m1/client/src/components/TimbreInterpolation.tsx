@@ -372,7 +372,7 @@ const TimbreInterpolation: React.FC<TimbreInterpolationProps> = ({ isConnected, 
         )}
         {!isUploading && !isMixing && fileAUploaded && fileBUploaded && (
           <p className="status-message status-ready">
-            🎵 Real-time timbre interpolation active - adjust slider for live crossfading
+            🎵 click (not drag) to adjust slider to crossfade
           </p>
         )}
       </div>

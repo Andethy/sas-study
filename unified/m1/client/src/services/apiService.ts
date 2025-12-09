@@ -141,6 +141,20 @@ class ApiService {
     });
   }
 
+  async setTimbreVolume(volume: number): Promise<{ status: string; volume: number; message: string }> {
+    return this.request('/timbre/volume', {
+      method: 'POST',
+      body: JSON.stringify({ volume }),
+    });
+  }
+
+  async setMasterVolume(volume: number): Promise<{ status: string; volume: number; message: string }> {
+    return this.request('/master/volume', {
+      method: 'POST',
+      body: JSON.stringify({ volume }),
+    });
+  }
+
   async deleteTimbreSample(sampleType: 'sample_a' | 'sample_b'): Promise<{ status: string; sample_type: string }> {
     return this.request(`/timbre/${sampleType}`, {
       method: 'DELETE',

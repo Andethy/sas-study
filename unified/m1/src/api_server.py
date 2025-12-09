@@ -449,6 +449,84 @@ class OrchestratorService:
             logger.warning("Real-time player not available, falling back to regeneration method")
             raise RuntimeError("Real-time player not initialized or not prepared")
     
+    async def set_timbre_volume(self, volume: float):
+        """Set the timbre playback volume"""
+        volume = max(0.0, min(1.0, volume))
+        
+        if self.realtime_player:
+            try:
+                self.realtime_player.set_volume(volume)
+                
+                logger.info(f"Timbre volume updated to: {volume}")
+                
+                # Broadcast update to connected clients
+                await self.manager.broadcast({
+                    "type": "timbre_volume_update",
+                    "volume": volume,
+                    "status": "success"
+                })
+                
+                return {
+                    "status": "success",
+                    "volume": volume,
+                    "message": "Volume updated"
+                }
+                
+            except Exception as e:
+                logger.error(f"Volume update error: {e}")
+                raise RuntimeError(f"Volume update failed: {str(e)}")
+        else:
+            raise RuntimeError("Real-time player not available")
+    
+    async def set_master_volume(self, volume: float):
+        """Set master volume via OSC to port 10000"""
+        volume = max(0.0, min(1.0, volume))
+        
+        try:
+            # Send OSC message to master volume control
+            import socket
+            import struct
+            
+            # Create OSC message for "/rhythm" address
+            address = "/rhythm"
+            
+            # OSC message format: address + type tag + value
+            # Pad address to 4-byte boundary
+            address_padded = address + '\0' * (4 - (len(address) % 4))
+            
+            # Type tag for float
+            type_tag = ",f\0\0"
+            
+            # Pack float value
+            value_packed = struct.pack('>f', volume)
+            
+            # Combine message
+            osc_message = address_padded.encode() + type_tag.encode() + value_packed
+            
+            # Send to port 10000
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.sendto(osc_message, ('localhost', 10000))
+            sock.close()
+            
+            logger.info(f"Master volume set to {volume} via OSC")
+            
+            # Broadcast update to connected clients
+            await self.manager.broadcast({
+                "type": "master_volume_update",
+                "volume": volume,
+                "status": "success"
+            })
+            
+            return {
+                "status": "success",
+                "volume": volume,
+                "message": f"Master volume set to {volume}"
+            }
+            
+        except Exception as e:
+            logger.error(f"Master volume update error: {e}")
+            raise RuntimeError(f"Master volume update failed: {str(e)}")
+    
     def get_timbre_status(self):
         """Get current timbre interpolation status"""
         realtime_status = self.realtime_player.get_status() if self.realtime_player else {}
@@ -663,6 +741,32 @@ async def stop_realtime_playback():
         return {"status": "success", "message": "Real-time playback stopped"}
     except Exception as e:
         logger.error(f"Error stopping real-time playback: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class TimbreVolumeRequest(BaseModel):
+    volume: float = Field(..., ge=0.0, le=1.0, description="Volume level from 0.0 to 1.0")
+
+@app.post("/timbre/volume")
+async def set_timbre_volume(volume_request: TimbreVolumeRequest):
+    """Set timbre playback volume"""
+    try:
+        result = await service.set_timbre_volume(volume_request.volume)
+        return result
+    except Exception as e:
+        logger.error(f"Error setting timbre volume: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class MasterVolumeRequest(BaseModel):
+    volume: float = Field(..., ge=0.0, le=1.0, description="Master volume level from 0.0 to 1.0")
+
+@app.post("/master/volume")
+async def set_master_volume(volume_request: MasterVolumeRequest):
+    """Set master volume via OSC"""
+    try:
+        result = await service.set_master_volume(volume_request.volume)
+        return result
+    except Exception as e:
+        logger.error(f"Error setting master volume: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ---- WebSocket Endpoint ----

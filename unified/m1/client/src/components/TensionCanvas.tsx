@@ -15,13 +15,22 @@ interface ZoneAnchor extends Point {
   color: string;
 }
 
-interface TensionCanvasProps {
-  tensions: Tensions;
-  onTensionUpdate: (tensions: Tensions) => void;
-  isAutomationMode?: boolean;
+interface MidiControllerState {
+  k1Knob: number;
+  k2Knob: number;
+  joystickX: number;
+  joystickY: number;
 }
 
-const TensionCanvas: React.FC<TensionCanvasProps> = ({ tensions, onTensionUpdate, isAutomationMode = false }) => {
+interface TensionCanvasProps {
+  tensions: Tensions;
+  onTensionUpdate: (tensions: Tensions, source?: 'mouse' | 'midi') => void;
+  isAutomationMode?: boolean;
+  midiControllerState?: MidiControllerState | null;
+  activeInputSource?: 'mouse' | 'midi';
+}
+
+const TensionCanvas: React.FC<TensionCanvasProps> = ({ tensions, onTensionUpdate, isAutomationMode = false, midiControllerState = null, activeInputSource = 'mouse' }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [canvasSize, setCanvasSize] = useState<{ width: number; height: number }>({ width: 600, height: 600 });
   const [isDragging, setIsDragging] = useState<boolean>(false);
@@ -91,7 +100,7 @@ const TensionCanvas: React.FC<TensionCanvasProps> = ({ tensions, onTensionUpdate
     
     const newTensions = calculateTensions(canvasPoint);
     console.log('Canvas point moved to:', canvasPoint, 'New tensions:', newTensions);
-    onTensionUpdate(newTensions);
+    onTensionUpdate(newTensions, 'mouse');
   }, [canvasPoint, calculateTensions, isAutomationMode]);
 
   // Draw canvas
@@ -149,14 +158,40 @@ const TensionCanvas: React.FC<TensionCanvasProps> = ({ tensions, onTensionUpdate
     });
 
     // Draw canvas point (draggable)
-    ctx.fillStyle = '#fff';
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 3;
+    // Draw mouse position with different styling based on active input
+    ctx.fillStyle = activeInputSource === 'mouse' ? '#fff' : '#ccc';
+    ctx.strokeStyle = activeInputSource === 'mouse' ? '#333' : '#666';
+    ctx.lineWidth = activeInputSource === 'mouse' ? 3 : 2;
     ctx.beginPath();
-    ctx.arc(canvasPoint.x, canvasPoint.y, 12, 0, 2 * Math.PI);
+    ctx.arc(canvasPoint.x, canvasPoint.y, activeInputSource === 'mouse' ? 12 : 8, 0, 2 * Math.PI);
     ctx.fill();
     ctx.stroke();
-  }, [canvasSize, canvasPoint, zoneAnchors, tensions]);
+    
+    // Draw MIDI controller position if available
+    if (midiControllerState) {
+      const midiX = ((midiControllerState.joystickX + 1) / 2) * canvasSize.width;
+      const midiY = (1 - midiControllerState.joystickY) * canvasSize.height; // joystick Y: 0=bottom, 1=top
+      
+      // Draw MIDI position with different styling based on active input
+      ctx.fillStyle = activeInputSource === 'midi' ? '#FFD700' : '#B8860B'; // Bright gold or dim gold
+      ctx.strokeStyle = activeInputSource === 'midi' ? '#FF8C00' : '#8B6914'; // Bright or dim orange
+      ctx.lineWidth = activeInputSource === 'midi' ? 3 : 2;
+      ctx.beginPath();
+      ctx.arc(midiX, midiY, activeInputSource === 'midi' ? 10 : 6, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.stroke();
+      
+      // Draw connection line between mouse and MIDI positions
+      ctx.strokeStyle = '#FFD700';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([5, 5]);
+      ctx.beginPath();
+      ctx.moveTo(canvasPoint.x, canvasPoint.y);
+      ctx.lineTo(midiX, midiY);
+      ctx.stroke();
+      ctx.setLineDash([]); // Reset line dash
+    }
+  }, [canvasSize, canvasPoint, zoneAnchors, tensions, midiControllerState, activeInputSource]);
 
   // Handle canvas resize
   useEffect(() => {
