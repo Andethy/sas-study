@@ -295,35 +295,51 @@ class HarmonicInstrument(Instrument):
         self._current_notes: List[int] = []
 
     def queue_next_chord(self, symbol: str):
-        self._queued_next = symbol
+        """Legacy method - use update_next_chord instead"""
+        self.update_next_chord(symbol)
     
-    def set_current_chord(self, symbol: str):
-        """Immediately update the current chord (for real-time tension control)"""
-        self._prev = symbol
-        # Clear any queued chord since we're setting current
-        self._queued_next = None
+    def update_next_chord(self, symbol: str):
+        """Update the chord for the next measure (replaces any existing queued chord)"""
+        if self._queued_next and self._queued_next != symbol:
+            print(f"Replacing queued chord {self._queued_next} with {symbol}")
+        else:
+            print(f"Queuing chord for next measure: {symbol}")
+        self._queued_next = symbol
 
     def _select_symbol(self, max_tension: float) -> str:
-        # Always prioritize queued chords
+        # Always prioritize queued chords (from API)
         if self._queued_next:
             sym = self._queued_next
             self._queued_next = None
             self._prev = sym
-            print(f"Using queued chord: {sym}")
+            print(f"Using API-queued chord: {sym}")
+            
+            # Anti-plain-major safeguard: if we have tension but got plain major, upgrade it
+            if max_tension > 0.01 and sym == f"{self.cfg.key_root}_M":
+                sym = f"{self.cfg.key_root}_sus2"  # Upgrade to sus2 for color
+                print(f"⚠️  Upgraded plain major to {sym} due to tension {max_tension:.3f}")
+            
             return sym
         
-        # Only use automatic tension-based selection if no chord is queued
-        if max_tension > 0:
+        # If no queued chord, use default behavior but with current tension
+        print(f"No queued chord, using orchestrator tension: {max_tension}")
+        if max_tension > 0.01:  # Very low threshold - any tension > 1% should trigger chord selection
             sym = self.hg.select_chord_by_tension(
                 current_tension=max_tension,
                 previous_chord=self._prev,
-                lambda_balance=1.0,
-                k=1
+                lambda_balance=0.1,  # Lower weight for delta error, prioritize tension matching
+                k=3  # Consider more candidates
             )
-            print(f"Auto-selected chord by tension {max_tension}: {sym}")
+            print(f"Orchestrator auto-selected chord by tension {max_tension}: {sym}")
+            
+            # Anti-plain-major safeguard: if we still got plain major with tension, upgrade it
+            if sym == f"{self.cfg.key_root}_M":
+                sym = f"{self.cfg.key_root}_sus2"  # Upgrade to sus2 for color
+                print(f"⚠️  Upgraded plain major to {sym} due to tension {max_tension:.3f}")
         else:
+            # For very low tension, allow the tonic chord
             sym = f"{self.cfg.key_root}_M"
-            print(f"Default chord (low tension): {sym}")
+            print(f"Orchestrator default chord (low tension {max_tension}): {sym}")
         self._prev = sym
         return sym
 
@@ -333,15 +349,120 @@ class HarmonicInstrument(Instrument):
         root = md.note_to_int(root_str + "0")
         return [root + i for i in md.HARMONIES_SHORT[ctype]]
 
-    def _voice_spread(self, base: List[int]) -> List[int]:
+    def _voice_spread(self, base: List[int], max_tension: float = 0.0) -> List[int]:
         base = sorted(base)
-        # choose degrees R,3,7 if available else R,3,5
+        
+        # If more than 3 notes, prioritize non-root notes and skip octave duplicates
+        if len(base) > 3:
+            root_note = base[0] % 12  # Get root note class
+            
+            # Start with root
+            selected = [base[0]]
+            
+            # Add non-root notes, avoiding octave duplicates of the root
+            for note in base[1:]:
+                if len(selected) >= 3:
+                    break
+                note_class = note % 12
+                # Skip if it's the same note class as root (octave duplicate)
+                if note_class == root_note:
+                    print(f"Skipping octave duplicate: {note} (note class {note_class}) matches root class {root_note}")
+                    continue
+                selected.append(note)
+            
+            # If we still need notes and only have octave duplicates left, add them
+            if len(selected) < 3:
+                for note in base[1:]:
+                    if len(selected) >= 3:
+                        break
+                    if note not in selected:
+                        selected.append(note)
+            
+            print(f"Voice selection: {len(base)} notes -> {len(selected)} notes: {base} -> {selected}")
+            base = selected
+        
+        # Smart voice selection: prioritize characteristic intervals
         if len(base) >= 4:
-            degrees = [base[0], base[1], base[3]]
+            # For 4+ note chords, choose root + most characteristic intervals
+            # Prioritize: root, 3rd, 7th (if available), then 9th, then 5th
+            root = base[0]
+            remaining = base[1:]
+            
+            # Always include root
+            degrees = [root]
+            
+            # Look for 3rd (3 or 4 semitones from root)
+            third = None
+            for note in remaining:
+                interval = (note - root) % 12
+                if interval in [3, 4]:  # minor or major 3rd
+                    third = note
+                    break
+            if third:
+                degrees.append(third)
+                remaining.remove(third)
+            
+            # Look for 7th or 6th (characteristic intervals)
+            extension = None
+            for note in remaining:
+                interval = (note - root) % 12
+                if interval in [9, 10, 11]:  # 6th, minor 7th, or major 7th
+                    extension = note
+                    break
+            if extension and len(degrees) < 3:
+                degrees.append(extension)
+                remaining.remove(extension)
+            
+            # If we still need notes, add 9th (2 semitones from root)
+            if len(degrees) < 3:
+                for note in remaining:
+                    interval = (note - root) % 12
+                    if interval == 2:  # 9th
+                        degrees.append(note)
+                        remaining.remove(note)
+                        break
+            
+            # If still need notes, add 5th (7 semitones from root)
+            if len(degrees) < 3:
+                for note in remaining:
+                    interval = (note - root) % 12
+                    if interval == 7:  # 5th
+                        degrees.append(note)
+                        remaining.remove(note)
+                        break
+            
+            # Fill remaining slots with any available notes
+            while len(degrees) < 3 and remaining:
+                degrees.append(remaining.pop(0))
+            
+            print(f"Smart voice selection for {len(base)} notes: {base} -> {degrees}")
         elif len(base) == 3:
             degrees = base
         else:
             degrees = base + base[:max(0, 3 - len(base))]
+        
+        # Anti-plain-triad fallback: if we ended up with a plain triad and there's tension, modify it
+        if len(degrees) == 3 and max_tension > 0.01:
+            intervals = [(note - degrees[0]) % 12 for note in degrees[1:]]
+            sorted_intervals = sorted(intervals)
+            
+            if sorted_intervals == [4, 7]:  # Major triad (3rd and 5th)
+                print(f"⚠️  Detected major triad {degrees} with tension {max_tension:.3f} - applying fallback")
+                # Replace the 5th with a sus2 (2nd) to avoid plain major sound
+                root = degrees[0]
+                third = degrees[1]  # Keep the 3rd
+                sus2 = root + 2  # Add sus2 instead of 5th
+                degrees = [root, third, sus2]
+                print(f"⚠️  Fallback result: {degrees} (root + 3rd + sus2)")
+            
+            elif sorted_intervals == [3, 7]:  # Minor triad (minor 3rd and 5th)
+                print(f"⚠️  Detected minor triad {degrees} with tension {max_tension:.3f} - applying fallback")
+                # Replace the 5th with a sus2 (2nd) to add color
+                root = degrees[0]
+                third = degrees[1]  # Keep the minor 3rd
+                sus2 = root + 2  # Add sus2 instead of 5th
+                degrees = [root, third, sus2]
+                print(f"⚠️  Fallback result: {degrees} (root + minor 3rd + sus2)")
 
         def near(n0: int, center: int) -> int:
             cands = [n0 + 12 * k for k in range(-6, 7)]
@@ -370,8 +491,22 @@ class HarmonicInstrument(Instrument):
         print(key_off)
         base = [n + key_off for n in base]
 
-        voiced = self._voice_spread(base)
+        voiced = self._voice_spread(base, max_tension)
         self._current_symbol, self._current_notes = symbol, voiced
+
+        # Convert MIDI notes to note names for debugging
+        note_names = []
+        for note in voiced:
+            try:
+                note_name = md.int_to_note(note)
+                note_names.append(note_name)
+            except:
+                note_names.append(f"MIDI{note}")
+        
+        print(f"🎵 PLAYING CHORD: {symbol}")
+        print(f"🎵 Base notes: {base}")
+        print(f"🎵 Voiced notes: {voiced}")
+        print(f"🎵 Note names: {note_names}")
 
         spb = 60.0 / max(20.0, min(240.0, self.cfg.bpm))
         dur = spb * self.cfg.beats_per_bar - 0.03
@@ -383,7 +518,7 @@ class HarmonicInstrument(Instrument):
             "harm.voice3": "zone3"
         }
 
-        for vid, n in zip(self.voice_ids, voiced):
+        for i, (vid, n) in enumerate(zip(self.voice_ids, voiced)):
             ch = self.cfg.channels.get(vid, self.channel())
             
             # Calculate velocity based on zone tension
@@ -395,17 +530,20 @@ class HarmonicInstrument(Instrument):
                 tension = zone_tensions.get(zone, 0.0)
                 # Scale tension (0-1) to velocity range (base_velocity to max_velocity)
                 velocity = base_velocity + (max_velocity - base_velocity) * tension
-                print(f"Voice {vid} -> {zone}: tension={tension:.3f}, velocity={velocity:.3f}")
+                print(f"🎵 Voice {i+1} ({vid}): MIDI {n} ({note_names[i]}) -> {zone}: tension={tension:.3f}, velocity={velocity:.3f}")
             else:
                 # Fallback to default velocity if no zone mapping
                 velocity = 0.7
-                print(f"Voice {vid}: using default velocity={velocity:.3f}")
+                print(f"🎵 Voice {i+1} ({vid}): MIDI {n} ({note_names[i]}) using default velocity={velocity:.3f}")
             
+            print(f"🎵 Sending OSC: port={self.ports.get(vid)}, note={n}, vel={velocity:.3f}, dur={dur:.3f}, ch={ch}")
             self.tx.send_now(OscMessage(
                 port=self.ports.get(vid),
                 address="/note",
                 args=[n, velocity, dur, ch]
             ))
+
+
 
 # ---------- Melodic ----------
 
@@ -446,6 +584,12 @@ class Orchestrator:
     def set_bpm(self, bpm: float): self.cfg.bpm = float(bpm)
     def set_tension(self, zone: str, val: float): self._tension[zone] = max(0.0, min(1.0, float(val)))
     def max_tension(self) -> float: return max(self._tension.values(), default=0.0)
+    
+    def get_current_beat_in_measure(self) -> int:
+        """Get the current beat position within the current measure (0-based)"""
+        # This is a simplified version - in a real implementation you'd track this properly
+        # For now, we'll assume we're always updating for the next measure
+        return 0
 
     # ---- Builders ----
     def add_percussion(self, instrument_id: str) -> PercussiveInstrument:
@@ -466,9 +610,9 @@ class Orchestrator:
     def queue_next_chord(self, group_id: str, symbol: str):
         self._harm_groups[group_id].queue_next_chord(symbol)
     
-    def set_current_chord(self, group_id: str, symbol: str):
-        """Immediately update the current chord"""
-        self._harm_groups[group_id].set_current_chord(symbol)
+    def update_next_chord(self, group_id: str, symbol: str):
+        """Update the chord for the next measure (replaces any existing queued chord)"""
+        self._harm_groups[group_id].update_next_chord(symbol)
 
     # ---- Scheduler phases ----
     def _on_downbeat_phase(self, bar_idx: int):

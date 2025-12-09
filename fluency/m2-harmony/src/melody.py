@@ -148,13 +148,26 @@ class HarmonyGenerator:
         - max_tension_error: hard tolerance for how far from target tension a chord may be
         - temperature: how random the final choice is (0 ≈ deterministic)
         """
+        # Special case: for very low tensions, strongly favor C_M
+        if current_tension <= 0.005:  # Only force C_M for extremely low tensions
+            print(f"[CHORD SELECTION] Very low tension {current_tension:.3f} - forcing C_M")
+            return "C_M"
         possible_chords = self._generate_possible_chords()  # [(chord, tension), ...]
+        print(f"[CHORD SELECTION] Total possible chords: {len(possible_chords)}")
+        
+        # Show best tension matches before filtering
+        tension_matches = [(chord, tension, abs(tension - current_tension)) for chord, tension in possible_chords]
+        tension_matches.sort(key=lambda x: x[2])  # sort by tension error
+        print(f"[CHORD SELECTION] Best tension matches:")
+        for chord, tension, error in tension_matches[:5]:
+            print(f"  {chord}: tension={tension:.3f}, error={error:.3f}")
+        
         scored = []
 
         # 1) first pass: compute separate errors
         for chord, chord_tension in possible_chords:
-            # hard constraints first
-            if chord == previous_chord or chord == "C_M":
+            # hard constraints first - only skip if same as previous chord
+            if chord == previous_chord:
                 continue
 
             tension_error = abs(chord_tension - current_tension)
@@ -178,7 +191,7 @@ class HarmonyGenerator:
         if not scored:
             # relax: ignore the hard tension window but still rank
             for chord, chord_tension in possible_chords:
-                if chord == previous_chord or chord == "C_M":
+                if chord == previous_chord:
                     continue
 
                 tension_error = abs(chord_tension - current_tension)
@@ -211,11 +224,37 @@ class HarmonyGenerator:
         chosen = r.choices(top, weights=probs, k=1)[0][0]
 
         # Debug logging
-        print("@", current_tension, previous_chord, lambda_balance)
-        print("@@ candidates:")
+        print(f"[CHORD SELECTION] Target tension: {current_tension:.3f}, Previous: {previous_chord}")
+        print(f"[CHORD SELECTION] Found {len(scored)} valid candidates after filtering")
+        print(f"[CHORD SELECTION] Top {len(top)} candidates:")
         for chord, ct, te, de, ce in top:
-            print(f"  {chord}: tension_err={te:.3f}, delta_err={de:.3f}, composite={ce:.3f}")
-        print("=> chosen:", chosen)
+            print(f"  {chord} (T={ct:.3f}): tension_err={te:.3f}, delta_err={de:.3f}, composite={ce:.3f}")
+        print(f"[CHORD SELECTION] => CHOSEN: {chosen}")
+        
+        # Special case logging for very low tensions
+        if current_tension <= 0.02:
+            print(f"[CHORD SELECTION] LOW TENSION DETECTED: {current_tension:.3f} - Should favor C_M")
+        
+        # Debug logging for high tensions
+        if current_tension >= 0.6:
+            print(f"[CHORD SELECTION] HIGH TENSION DETECTED: {current_tension:.3f}")
+            print(f"[CHORD SELECTION] Expected candidates: G_M6(0.688), F_M9(0.657), G_dom7sus4(0.757)")
+            if chosen in ['C_M9', 'C_M', 'C_M7']:
+                print(f"[CHORD SELECTION] WARNING: Selected low-tension chord {chosen} for high tension {current_tension:.3f}!")
+        
+        # Fallback mechanism: if chosen chord has very poor tension match, override with best tension match
+        chosen_tension = self.get_chord_tension(chosen)
+        tension_error = abs(chosen_tension - current_tension)
+        if tension_error > 0.3:  # If error is too large, use simple best match
+            print(f"[CHORD SELECTION] FALLBACK: Tension error {tension_error:.3f} too large, using best tension match")
+            # Find best tension match ignoring delta errors
+            candidates_by_tension = [(chord, tension, abs(tension - current_tension)) 
+                                   for chord, tension in possible_chords 
+                                   if chord != previous_chord]
+            if candidates_by_tension:
+                best_match = min(candidates_by_tension, key=lambda x: x[2])
+                chosen = best_match[0]
+                print(f"[CHORD SELECTION] FALLBACK CHOSEN: {chosen} (T={best_match[1]:.3f}, error={best_match[2]:.3f})")
 
         return chosen
 

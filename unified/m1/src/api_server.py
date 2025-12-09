@@ -248,10 +248,10 @@ class OrchestratorService:
             "chord": symbol
         })
     
-    async def set_current_chord(self, group_id: str, symbol: str):
-        """Immediately update the current chord"""
+    async def update_next_chord(self, group_id: str, symbol: str):
+        """Update the chord for the next measure (replaces any existing queued chord)"""
         async with self._lock:
-            self.orch.set_current_chord(group_id, symbol)
+            self.orch.update_next_chord(group_id, symbol)
         
         await self.manager.broadcast({
             "type": "chord_updated",
@@ -265,14 +265,15 @@ class OrchestratorService:
             harm_inst = self.orch._harm_groups.get(group_id)
             if harm_inst and harm_inst.hg:
                 # Only queue chord if tension is significant, otherwise let orchestrator use default
-                if tension > 0.05:  # Only queue if tension > 5%
+                if tension > 0.01:  # Only queue if tension > 1% (very responsive)
                     new_chord = harm_inst.hg.select_chord_by_tension(
                         current_tension=tension,
                         previous_chord=harm_inst._prev,
-                        lambda_balance=1.0
+                        lambda_balance=0.1,  # Lower weight for delta error, prioritize tension matching
+                        k=3  # Consider more candidates
                     )
-                    # Queue it for next measure (replaces any existing queued chord)
-                    harm_inst.queue_next_chord(new_chord)
+                    # Update next measure chord (replaces any existing queued chord)
+                    harm_inst.update_next_chord(new_chord)
                     
                     logger.info(f"Queued chord by tension {tension}: {new_chord} (prev: {harm_inst._prev})")
                     
@@ -284,8 +285,9 @@ class OrchestratorService:
                     
                     return new_chord
                 else:
-                    # Clear any queued chord to let orchestrator use default
-                    harm_inst._queued_next = None
+                    # Update next measure to use default chord
+                    default_chord = f"{self.orch.cfg.key_root}_M"
+                    harm_inst.update_next_chord(default_chord)
                     default_chord = f"{self.orch.cfg.key_root}_M"
                     
                     logger.info(f"Low tension {tension}, cleared queue for default chord: {default_chord}")
@@ -308,10 +310,10 @@ class OrchestratorService:
             # Convert MIDI notes to chord symbol
             chord_symbol = self._notes_to_chord_symbol(notes)
             
-            # Get the harmonic instrument and queue the chord
+            # Get the harmonic instrument and update the next chord
             harm_inst = self.orch._harm_groups.get(group_id)
             if harm_inst:
-                harm_inst.queue_next_chord(chord_symbol)
+                harm_inst.update_next_chord(chord_symbol)
                 
                 logger.info(f"Queued custom chord from notes {notes}: {chord_symbol}")
                 
@@ -327,12 +329,38 @@ class OrchestratorService:
                 raise RuntimeError(f"Harmonic group {group_id} not found")
     
     def _notes_to_chord_symbol(self, notes: List[int]) -> str:
-        """Convert MIDI note numbers to chord symbol"""
+        """Convert MIDI note numbers to chord symbol, limiting to 3 voices"""
         if len(notes) < 3:
             return "C_M"  # fallback
         
-        # Sort notes and get the root (lowest note)
+        # Sort notes and limit to 3 voices
         sorted_notes = sorted(notes)
+        
+        # If more than 3 notes, select the best 3 voices
+        if len(sorted_notes) > 3:
+            # Keep root (lowest), and select 2 others that aren't root duplicates
+            root_note = sorted_notes[0] % 12
+            selected_notes = [sorted_notes[0]]  # Always keep root
+            
+            # Add non-root notes, prioritizing wider intervals
+            for note in sorted_notes[1:]:
+                if len(selected_notes) >= 3:
+                    break
+                # Skip if it's the same note class as root (octave duplicate)
+                if note % 12 != root_note:
+                    selected_notes.append(note)
+            
+            # If we still need more notes and only have root duplicates, add them
+            if len(selected_notes) < 3:
+                for note in sorted_notes[1:]:
+                    if len(selected_notes) >= 3:
+                        break
+                    if note not in selected_notes:
+                        selected_notes.append(note)
+            
+            sorted_notes = selected_notes
+        
+        # Get the root (lowest note)
         root_note = sorted_notes[0] % 12
         
         # Map MIDI note numbers to note names
@@ -342,7 +370,7 @@ class OrchestratorService:
         # Calculate intervals from root
         intervals = [(note - sorted_notes[0]) % 12 for note in sorted_notes[1:]]
         
-        # Determine chord quality based on intervals
+        # Determine chord quality based on intervals (simplified for 3 voices)
         if 4 in intervals and 7 in intervals:  # Major triad
             return f"{root_name}_M"
         elif 3 in intervals and 7 in intervals:  # Minor triad
